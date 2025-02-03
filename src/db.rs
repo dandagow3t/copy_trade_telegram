@@ -1,11 +1,6 @@
 use crate::parse_trade::Trade;
 use anyhow::Result;
-use futures::stream::TryStreamExt;
-use mongodb::{
-    bson::doc,
-    options::IndexOptions,
-    Collection, IndexModel,
-};
+use mongodb::{bson::doc, options::IndexOptions, Collection, IndexModel};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -97,18 +92,11 @@ pub async fn store_trade_db(
     Ok(())
 }
 
-pub async fn find_trades_by_strategy_and_token(
-    collection: &Collection<TradeDocument>,
-    strategy: &str,
-    token: &str,
-) -> Result<Vec<TradeDocument>> {
-    let filter = doc! {
-        "strategy": strategy,
-        "token": token
-    };
+pub async fn get_last_message_id(collection: &Collection<TradeDocument>) -> Result<Option<i64>> {
+    let options = mongodb::options::FindOneOptions::builder()
+        .sort(doc! { "message_id": -1 })
+        .build();
 
-    let cursor = collection.find(filter, None).await?;
-    let trades: Vec<TradeDocument> = cursor.try_collect().await?;
-
-    Ok(trades)
+    let doc = collection.find_one(None, Some(options)).await?;
+    Ok(doc.map(|d| d.message_id))
 }
