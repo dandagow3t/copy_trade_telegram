@@ -32,7 +32,8 @@ Create a `.env` file with your credentials:
 API_ID=your_api_id
 API_HASH=your_api_hash
 DB_NAME=your_db_name
-DB_URL=your_mongodb_connection_string
+MONGODB_URI=mongodb://localhost:27017
+GROUP_NAME="your_tg_group_name"
 ```
 
 The MongoDB connection string typically looks like:
@@ -44,7 +45,5 @@ The MongoDB connection string typically looks like:
 Run the program with:
 
 ```bash
-cargo run -- <name_of_chat>
+cargo run
 ```
-
-Replace `<name_of_chat>` with the Telegram chat/group name you want to analyze.
