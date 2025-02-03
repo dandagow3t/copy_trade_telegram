@@ -1,0 +1,18 @@
+[package]
+name = "copy_trade_telegram"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+grammers-client = "0.7.0"
+log = "0.4.25"
+mime_guess = "2.0.5"
+simple_logger = "5.0.0"
+tokio = { version = "1.43.0", default-features = false, features = [
+    "rt",
+] }
+mongodb = "2.8"
+serde = { version = "1.0", features = ["derive"] }
+futures = "0.3"
+anyhow = "1.0"
+dotenv = "0.15.0"
