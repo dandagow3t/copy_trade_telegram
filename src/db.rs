@@ -1,5 +1,6 @@
 use crate::parse_trade::Trade;
 use anyhow::Result;
+use chrono::{DateTime, Utc};
 use mongodb::{bson::doc, options::IndexOptions, Collection, IndexModel};
 use serde::{Deserialize, Serialize};
 
@@ -12,6 +13,7 @@ pub enum TradeType {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct TradeDocument {
     pub message_id: i64,
+    pub date: DateTime<Utc>,
     pub strategy: String,
     pub token: String,
     pub contract_address: String,
@@ -50,10 +52,12 @@ pub async fn store_trade_db(
     trade: Trade,
     message_id: i64,
     original_message: String,
+    date: DateTime<Utc>,
 ) -> Result<()> {
     let doc = match trade {
         Trade::Open(open) => TradeDocument {
             message_id,
+            date,
             strategy: open.strategy,
             token: open.token,
             contract_address: open.contract_address,
@@ -71,6 +75,7 @@ pub async fn store_trade_db(
         },
         Trade::Close(close) => TradeDocument {
             message_id,
+            date,
             strategy: close.strategy,
             token: close.token,
             contract_address: close.contract_address,

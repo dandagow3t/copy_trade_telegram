@@ -17,3 +17,4 @@ futures = "0.3"
 anyhow = "1.0"
 dotenv = "0.15.0"
 grammers-session = "0.7.0"
+chrono = { version = "0.4.39", features = ["serde"] }

@@ -203,6 +203,7 @@ dependencies = [
  "iana-time-zone",
  "js-sys",
  "num-traits",
+ "serde",
  "wasm-bindgen",
  "windows-targets 0.52.6",
 ]
@@ -238,6 +239,7 @@ name = "copy_trade_telegram"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "chrono",
  "dotenv",
  "futures",
  "grammers-client",

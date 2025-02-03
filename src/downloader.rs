@@ -121,7 +121,6 @@ async fn process_historical_messages(
     last_message_id: i64,
 ) -> Result<()> {
     let mut messages = client.iter_messages(chat.clone());
-
     while let Some(message) = messages.next().await? {
         if (message.id() as i64) <= last_message_id {
             break;
@@ -129,7 +128,14 @@ async fn process_historical_messages(
         let text = message.text();
         println!("Processing message {} - {}", message.id(), text);
         if let Some(trade) = parse_trade(text) {
-            db::store_trade_db(collection, trade, message.id() as i64, text.to_string()).await?;
+            db::store_trade_db(
+                collection,
+                trade,
+                message.id() as i64,
+                text.to_string(),
+                message.date().into(),
+            )
+            .await?;
             println!("Store message {}", message.id());
         }
     }
@@ -159,8 +165,14 @@ async fn listen_for_new_messages(
 
             let text = message.text();
             if let Some(trade) = parse_trade(text) {
-                db::store_trade_db(collection, trade, message.id() as i64, text.to_string())
-                    .await?;
+                db::store_trade_db(
+                    collection,
+                    trade,
+                    message.id() as i64,
+                    text.to_string(),
+                    message.date().into(),
+                )
+                .await?;
                 println!("Stored new message {}", message.id());
             }
         }
