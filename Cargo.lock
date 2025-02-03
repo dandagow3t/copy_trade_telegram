@@ -241,6 +241,7 @@ dependencies = [
  "dotenv",
  "futures",
  "grammers-client",
+ "grammers-session",
  "log",
  "mime_guess",
  "mongodb",
