@@ -2,10 +2,11 @@ use anyhow::Result;
 use async_trait::async_trait;
 use solana_sdk::signature::Keypair;
 use solana_sdk::signer::Signer;
+use solana_sdk::transaction::Transaction;
 use std::sync::Arc;
 
 use crate::solana::blockhash::BLOCKHASH_CACHE;
-use crate::solana::transaction::send_tx;
+use crate::solana::transaction::{add_jito_tip, add_priority_fee, send_tx};
 
 use super::TransactionSigner;
 
@@ -39,7 +40,21 @@ impl TransactionSigner for LocalSolanaSigner {
         tx: &mut solana_sdk::transaction::Transaction,
     ) -> Result<String> {
         let recent_blockhash = BLOCKHASH_CACHE.get_blockhash().await?;
+        tracing::info!("recent_blockhash: {:?}", recent_blockhash);
         tx.try_sign(&[&*self.keypair], recent_blockhash)?;
         send_tx(tx).await
+    }
+
+    async fn priority_sign_and_send_solana_transaction(
+        &self,
+        ix: &mut Vec<solana_sdk::instruction::Instruction>,
+    ) -> Result<String> {
+        let recent_blockhash = BLOCKHASH_CACHE.get_blockhash().await?;
+        tracing::info!("recent_blockhash: {:?}", recent_blockhash);
+        add_priority_fee(ix, None, None);
+        add_jito_tip(ix, &self.keypair.pubkey());
+        let mut tx = Transaction::new_with_payer(ix, Some(&self.keypair.pubkey()));
+        tx.try_sign(&[&*self.keypair], recent_blockhash)?;
+        send_tx(&tx).await
     }
 }

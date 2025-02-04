@@ -6,8 +6,8 @@ use tracing::{info, warn};
 use crate::solana::{
     dexscreener::search_ticker,
     pump::{fetch_metadata, get_bonding_curve, mint_to_pump_accounts},
-    trade_pump::{create_buy_pump_fun_tx, create_sell_pump_fun_tx},
-    util::{execute_solana_transaction, make_rpc_client},
+    trade_pump::{create_buy_pump_fun_ix, create_sell_pump_fun_ix},
+    util::{execute_solana_transaction_with_priority, make_rpc_client},
 };
 
 pub struct MemeTrader {
@@ -23,6 +23,7 @@ pub struct MemeTokenInfo {
     pub volume_24h: f64,
     pub is_pump_fun: bool,
     pub dex: String,
+    pub raydium_pool: Option<String>,
 }
 
 impl MemeTrader {
@@ -46,6 +47,7 @@ impl MemeTrader {
                         volume_24h: 0.0, // Pump.fun doesn't provide 24h volume
                         is_pump_fun: true,
                         dex: "pump.fun".to_string(),
+                        raydium_pool: None,
                     });
                 }
             }
@@ -67,6 +69,11 @@ impl MemeTrader {
             volume_24h: pair.volume.h24,
             is_pump_fun: false,
             dex: pair.dex_id.clone(),
+            raydium_pool: if pair.dex_id == "raydium" {
+                Some(pair.pair_address.clone())
+            } else {
+                None
+            },
         })
     }
 
@@ -93,8 +100,8 @@ impl MemeTrader {
 
         let token_address = token_address.to_string();
 
-        execute_solana_transaction(move |owner| async move {
-            create_buy_pump_fun_tx(
+        execute_solana_transaction_with_priority(move |owner| async move {
+            create_buy_pump_fun_ix(
                 token_address.to_string(),
                 sol_to_lamports(sol_amount),
                 slippage_bps,
@@ -111,13 +118,37 @@ impl MemeTrader {
         info!("Selling {} tokens of {}", token_amount, token_address);
 
         let token_address = token_address.to_string();
-        execute_solana_transaction(move |owner| async move {
-            create_sell_pump_fun_tx(token_address.to_string(), token_amount, &owner).await
+        execute_solana_transaction_with_priority(move |owner| async move {
+            create_sell_pump_fun_ix(token_address.to_string(), token_amount, &owner).await
         })
         .await
     }
 
-    // TODO: Add Raydium trading functions when needed
+    // pub async fn buy_on_jupiter(
+    //     &self,
+    //     token_address: &str,
+    //     sol_amount: f64,
+    //     slippage_bps: u16,
+    // ) -> Result<String> {
+    //     info!(
+    //         "Buying {} SOL worth of token {} on Jupiter",
+    //         sol_amount, token_address
+    //     );
+
+    //     let token_address = token_address.to_string();
+    //     execute_solana_transactions(move |owner| async move {
+    //         create_trade_transaction(
+    //             "So11111111111111111111111111111111111111112".to_string(), // WSOL
+    //             sol_to_lamports(sol_amount),
+    //             token_address.to_string(),
+    //             slippage_bps,
+    //             &owner,
+    //         )
+    //         .await
+    //     })
+    //     .await
+    // }
+    // // TODO: Add Raydium trading functions when needed
 }
 
 #[cfg(test)]

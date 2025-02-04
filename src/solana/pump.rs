@@ -1,9 +1,9 @@
 use crate::solana::{
     blockhash::BLOCKHASH_CACHE,
     constants::{
-        ASSOCIATED_TOKEN_PROGRAM, EVENT_AUTHORITY, PUMP_BUY_METHOD,
-        PUMP_FEE_ADDRESS, PUMP_FUN_PROGRAM, PUMP_GLOBAL_ADDRESS,
-        PUMP_SELL_METHOD, RENT_PROGRAM, SYSTEM_PROGRAM_ID, TOKEN_PROGRAM,
+        ASSOCIATED_TOKEN_PROGRAM, EVENT_AUTHORITY, PUMP_BUY_METHOD, PUMP_FEE_ADDRESS,
+        PUMP_FUN_PROGRAM, PUMP_GLOBAL_ADDRESS, PUMP_SELL_METHOD, RENT_PROGRAM, SYSTEM_PROGRAM_ID,
+        TOKEN_PROGRAM,
     },
     transaction::{get_jito_tip_pubkey, send_tx},
     util::apply_fee,
@@ -32,8 +32,8 @@ use solana_sdk::pubkey::Pubkey;
 use solana_sdk::signature::{Keypair, Signature};
 use solana_sdk::signer::Signer;
 use solana_transaction_status::{
-    EncodedConfirmedTransactionWithStatusMeta, EncodedTransaction, UiMessage,
-    UiParsedMessage, UiTransactionEncoding,
+    EncodedConfirmedTransactionWithStatusMeta, EncodedTransaction, UiMessage, UiParsedMessage,
+    UiTransactionEncoding,
 };
 
 #[derive(BorshSerialize)]
@@ -74,12 +74,8 @@ impl BondingCurveLayout {
     }
 }
 
-pub async fn get_slot_created(
-    rpc_client: &RpcClient,
-    mint: &Pubkey,
-) -> Result<u64> {
-    let token_transactions =
-        rpc_client.get_signatures_for_address(mint).await?;
+pub async fn get_slot_created(rpc_client: &RpcClient, mint: &Pubkey) -> Result<u64> {
+    let token_transactions = rpc_client.get_signatures_for_address(mint).await?;
 
     if token_transactions.is_empty() {
         warn!("No transactions found for mint: {}", mint);
@@ -110,10 +106,7 @@ pub fn mint_to_pump_accounts(mint: &Pubkey) -> PumpAccounts {
 
     // Derive the associated bonding curve address
     let associated_bonding_curve =
-        spl_associated_token_account::get_associated_token_address(
-            &bonding_curve,
-            mint,
-        );
+        spl_associated_token_account::get_associated_token_address(&bonding_curve, mint);
 
     PumpAccounts {
         mint: *mint,
@@ -149,27 +142,19 @@ pub async fn get_bonding_curve(
                 if let Some(account) = res.value {
                     // Convert Vec<u8> to [u8; 49]
                     let data_length = account.data.len();
-                    let data: [u8; 49] =
-                        account.data.try_into().map_err(|_| {
-                            anyhow!("Invalid data length: {}", data_length)
-                        })?;
+                    let data: [u8; 49] = account
+                        .data
+                        .try_into()
+                        .map_err(|_| anyhow!("Invalid data length: {}", data_length))?;
 
                     debug!("Raw bytes: {:?}", data);
 
                     let layout = BondingCurveLayout {
                         blob1: u64::from_le_bytes(data[0..8].try_into()?),
-                        virtual_token_reserves: u64::from_le_bytes(
-                            data[8..16].try_into()?,
-                        ),
-                        virtual_sol_reserves: u64::from_le_bytes(
-                            data[16..24].try_into()?,
-                        ),
-                        real_token_reserves: u64::from_le_bytes(
-                            data[24..32].try_into()?,
-                        ),
-                        real_sol_reserves: u64::from_le_bytes(
-                            data[32..40].try_into()?,
-                        ),
+                        virtual_token_reserves: u64::from_le_bytes(data[8..16].try_into()?),
+                        virtual_sol_reserves: u64::from_le_bytes(data[16..24].try_into()?),
+                        real_token_reserves: u64::from_le_bytes(data[24..32].try_into()?),
+                        real_sol_reserves: u64::from_le_bytes(data[32..40].try_into()?),
                         blob4: u64::from_le_bytes(data[40..48].try_into()?),
                         complete: data[48] != 0,
                     };
@@ -179,9 +164,7 @@ pub async fn get_bonding_curve(
                 } else {
                     if retries >= MAX_RETRIES {
                         error!("Max retries reached. Account not found.");
-                        return Err(anyhow!(
-                            "Account not found after max retries"
-                        ));
+                        return Err(anyhow!("Account not found after max retries"));
                     }
                     warn!(
                         "Attempt {} failed: Account not found. Retrying in {:?}...",
@@ -190,19 +173,14 @@ pub async fn get_bonding_curve(
                     );
                     sleep(delay).await;
                     retries += 1;
-                    delay = Duration::from_millis(
-                        INITIAL_DELAY_MS * 2u64.pow(retries),
-                    );
+                    delay = Duration::from_millis(INITIAL_DELAY_MS * 2u64.pow(retries));
                     continue;
                 }
             }
             Err(e) => {
                 if retries >= MAX_RETRIES {
                     error!("Max retries reached. Last error: {}", e);
-                    return Err(anyhow!(
-                        "Max retries reached. Last error: {}",
-                        e
-                    ));
+                    return Err(anyhow!("Max retries reached. Last error: {}", e));
                 }
                 warn!(
                     "Attempt {} failed: {}. Retrying in {:?}...",
@@ -212,9 +190,7 @@ pub async fn get_bonding_curve(
                 );
                 sleep(delay).await;
                 retries += 1;
-                delay = Duration::from_millis(
-                    INITIAL_DELAY_MS * 2u64.pow(retries),
-                );
+                delay = Duration::from_millis(INITIAL_DELAY_MS * 2u64.pow(retries));
             }
         }
     }
@@ -254,12 +230,11 @@ pub fn get_pump_token_amount(
         .ok_or("Underflow in amount out calculation")
         .map_err(|e| anyhow!(e))?;
 
-    let final_amount_out =
-        if let Some(real_token_reserves) = real_token_reserves {
-            std::cmp::min(amount_out, real_token_reserves as u128)
-        } else {
-            amount_out
-        };
+    let final_amount_out = if let Some(real_token_reserves) = real_token_reserves {
+        std::cmp::min(amount_out, real_token_reserves as u128)
+    } else {
+        amount_out
+    };
 
     Ok(final_amount_out as u64)
 }
@@ -314,12 +289,7 @@ pub async fn buy_pump_token(
 
     ixs.push(transfer(&owner, &get_jito_tip_pubkey(), tip));
 
-    let tx = Transaction::new_signed_with_payer(
-        &ixs,
-        Some(&owner),
-        &[wallet],
-        latest_blockhash,
-    );
+    let tx = Transaction::new_signed_with_payer(&ixs, Some(&owner), &[wallet], latest_blockhash);
 
     send_tx(&tx).await?;
 
@@ -335,9 +305,7 @@ pub fn _make_buy_ixs(
     lamports: u64,
 ) -> Result<Vec<Instruction>> {
     let mut ixs = vec![];
-    let ata = spl_associated_token_account::get_associated_token_address(
-        &owner, &mint,
-    );
+    let ata = spl_associated_token_account::get_associated_token_address(&owner, &mint);
 
     ixs.push(
         spl_associated_token_account::instruction::create_associated_token_account_idempotent(
@@ -366,13 +334,12 @@ async fn _send_tx_standard(
     rpc_client: &RpcClient,
     owner: Pubkey,
 ) -> Result<()> {
-    let transaction =
-        VersionedTransaction::from(Transaction::new_signed_with_payer(
-            &ixs,
-            Some(&owner),
-            &[wallet],
-            BLOCKHASH_CACHE.get_blockhash().await?,
-        ));
+    let transaction = VersionedTransaction::from(Transaction::new_signed_with_payer(
+        &ixs,
+        Some(&owner),
+        &[wallet],
+        BLOCKHASH_CACHE.get_blockhash().await?,
+    ));
     let res = rpc_client
         .send_transaction_with_config(
             &transaction,
@@ -407,10 +374,8 @@ pub async fn sell_pump_token(
 ) -> Result<()> {
     let owner = wallet.pubkey();
 
-    let ata = spl_associated_token_account::get_associated_token_address(
-        &owner,
-        &pump_accounts.mint,
-    );
+    let ata =
+        spl_associated_token_account::get_associated_token_address(&owner, &pump_accounts.mint);
 
     let mut ixs = vec![];
     let mut compute_budget_ixs = make_compute_budget_ixs(69_000, 69_000);
@@ -419,12 +384,7 @@ pub async fn sell_pump_token(
     ixs.push(sell_ix);
     ixs.push(transfer(&owner, &get_jito_tip_pubkey(), 30_000));
 
-    let tx = Transaction::new_signed_with_payer(
-        &ixs,
-        Some(&owner),
-        &[wallet],
-        latest_blockhash,
-    );
+    let tx = Transaction::new_signed_with_payer(&ixs, Some(&owner), &[wallet], latest_blockhash);
 
     send_tx(&tx).await?;
 
@@ -451,24 +411,15 @@ pub fn make_pump_sell_ix(
     ata: Pubkey,
 ) -> Result<Instruction> {
     let accounts: [AccountMeta; 12] = [
-        AccountMeta::new_readonly(
-            Pubkey::from_str(PUMP_GLOBAL_ADDRESS)?,
-            false,
-        ),
+        AccountMeta::new_readonly(Pubkey::from_str(PUMP_GLOBAL_ADDRESS)?, false),
         AccountMeta::new(Pubkey::from_str(PUMP_FEE_ADDRESS)?, false),
         AccountMeta::new_readonly(pump_accounts.mint, false),
         AccountMeta::new(pump_accounts.bonding_curve, false),
         AccountMeta::new(pump_accounts.associated_bonding_curve, false),
         AccountMeta::new(ata, false),
         AccountMeta::new(owner, true),
-        AccountMeta::new_readonly(
-            Pubkey::from_str(SYSTEM_PROGRAM_ID)?,
-            false,
-        ),
-        AccountMeta::new_readonly(
-            Pubkey::from_str(ASSOCIATED_TOKEN_PROGRAM)?,
-            false,
-        ),
+        AccountMeta::new_readonly(Pubkey::from_str(SYSTEM_PROGRAM_ID)?, false),
+        AccountMeta::new_readonly(Pubkey::from_str(ASSOCIATED_TOKEN_PROGRAM)?, false),
         AccountMeta::new_readonly(Pubkey::from_str(TOKEN_PROGRAM)?, false),
         AccountMeta::new_readonly(Pubkey::from_str(EVENT_AUTHORITY)?, false),
         AccountMeta::new_readonly(Pubkey::from_str(PUMP_FUN_PROGRAM)?, false),
@@ -512,20 +463,14 @@ pub fn make_pump_swap_ix(
     ata: Pubkey,
 ) -> Result<Instruction> {
     let accounts: [AccountMeta; 12] = [
-        AccountMeta::new_readonly(
-            Pubkey::from_str(PUMP_GLOBAL_ADDRESS)?,
-            false,
-        ),
+        AccountMeta::new_readonly(Pubkey::from_str(PUMP_GLOBAL_ADDRESS)?, false),
         AccountMeta::new(Pubkey::from_str(PUMP_FEE_ADDRESS)?, false),
         AccountMeta::new_readonly(mint, false),
         AccountMeta::new(bonding_curve, false),
         AccountMeta::new(associated_bonding_curve, false),
         AccountMeta::new(ata, false),
         AccountMeta::new(owner, true),
-        AccountMeta::new_readonly(
-            Pubkey::from_str(SYSTEM_PROGRAM_ID)?,
-            false,
-        ),
+        AccountMeta::new_readonly(Pubkey::from_str(SYSTEM_PROGRAM_ID)?, false),
         AccountMeta::new_readonly(Pubkey::from_str(TOKEN_PROGRAM)?, false),
         AccountMeta::new_readonly(Pubkey::from_str(RENT_PROGRAM)?, false),
         AccountMeta::new_readonly(Pubkey::from_str(EVENT_AUTHORITY)?, false),
@@ -574,9 +519,7 @@ pub struct PumpAccounts {
     pub metadata: Pubkey,
 }
 
-pub fn parse_pump_accounts(
-    tx: EncodedConfirmedTransactionWithStatusMeta,
-) -> Result<PumpAccounts> {
+pub fn parse_pump_accounts(tx: EncodedConfirmedTransactionWithStatusMeta) -> Result<PumpAccounts> {
     if let EncodedTransaction::Json(tx) = &tx.transaction.transaction {
         if let UiMessage::Parsed(UiParsedMessage {
             account_keys,
@@ -590,8 +533,7 @@ pub fn parse_pump_accounts(
                 let dev = account_keys[0].pubkey.parse()?;
                 let mint = account_keys[1].pubkey.parse()?;
                 let bonding_curve = account_keys[3].pubkey.parse()?;
-                let associated_bonding_curve =
-                    account_keys[4].pubkey.parse()?;
+                let associated_bonding_curve = account_keys[4].pubkey.parse()?;
                 let metadata = account_keys[5].pubkey.parse()?;
 
                 Ok(PumpAccounts {
@@ -712,8 +654,7 @@ mod tests {
     #[ignore]
     async fn test_fetch_metadata() {
         let metadata = fetch_metadata(
-            &Pubkey::from_str("4cRkQ2dntpusYag6Zmvco8T78WxK9Jqh1eEZJox8pump")
-                .expect("parse mint"),
+            &Pubkey::from_str("4cRkQ2dntpusYag6Zmvco8T78WxK9Jqh1eEZJox8pump").expect("parse mint"),
         )
         .await
         .expect("fetch_metadata");
@@ -740,28 +681,20 @@ mod tests {
 
     #[test]
     fn test_parse_pump_accounts() {
-        let sample_tx = std::fs::read_to_string("mocks/pump_fun_tx.json")
-            .expect("read tx");
+        let sample_tx = std::fs::read_to_string("mocks/pump_fun_tx.json").expect("read tx");
         let tx: EncodedConfirmedTransactionWithStatusMeta =
             serde_json::from_str(&sample_tx).expect("parse tx");
         let accounts = parse_pump_accounts(tx).expect("parse accounts");
         tracing::debug!(?accounts, "parsed_accounts");
+        assert!(accounts.mint.to_string() == "6kPvKNrLqg23mApAvHzMKWohhVdSrA54HvrpYud8pump");
         assert!(
-            accounts.mint.to_string()
-                == "6kPvKNrLqg23mApAvHzMKWohhVdSrA54HvrpYud8pump"
-        );
-        assert!(
-            accounts.bonding_curve.to_string()
-                == "6TGz5VAFF6UpSmTSk9327utugSWJCyVeVVFXDtZnMtNp"
+            accounts.bonding_curve.to_string() == "6TGz5VAFF6UpSmTSk9327utugSWJCyVeVVFXDtZnMtNp"
         );
         assert!(
             accounts.associated_bonding_curve.to_string()
                 == "4VwNGUif2ubbPjx4YNHmxEH7L4Yt2QFeo8uVTrVC3F68"
         );
-        assert!(
-            accounts.dev.to_string()
-                == "2wgo94ZaiUNUkFBSKNaKsUgEANgSdex7gRpFKR39DPzw"
-        );
+        assert!(accounts.dev.to_string() == "2wgo94ZaiUNUkFBSKNaKsUgEANgSdex7gRpFKR39DPzw");
     }
 
     #[tokio::test]
@@ -770,26 +703,19 @@ mod tests {
         // 0.00069 sol
         let lamports = 690000;
         let pump_accounts = PumpAccounts {
-            mint: Pubkey::from_str(
-                "5KEDcNGebCcLptWzknqVmPRNLHfiHA9Mm2djVE26pump",
-            )
-            .expect("parse mint"),
-            bonding_curve: Pubkey::from_str(
-                "Drhj4djqLsPyiA9qK2YmBngteFba8XhhvuQoBToW6pMS",
-            )
-            .expect("parse bonding curve"),
+            mint: Pubkey::from_str("5KEDcNGebCcLptWzknqVmPRNLHfiHA9Mm2djVE26pump")
+                .expect("parse mint"),
+            bonding_curve: Pubkey::from_str("Drhj4djqLsPyiA9qK2YmBngteFba8XhhvuQoBToW6pMS")
+                .expect("parse bonding curve"),
             associated_bonding_curve: Pubkey::from_str(
                 "7uXq8diH862Dh8NgMHt5Tzsai8SvURhH58rArgxvs7o1",
             )
             .expect("parse associated bonding curve"),
-            dev: Pubkey::from_str(
-                "Gizxxed4uXCzL7Q8DyALDVoEEDfMkSV7XyUNrPDnPJ9J",
-            )
-            .expect("parse associated user"),
+            dev: Pubkey::from_str("Gizxxed4uXCzL7Q8DyALDVoEEDfMkSV7XyUNrPDnPJ9J")
+                .expect("parse associated user"),
             metadata: Pubkey::default(), // not required
         };
-        let wallet = Keypair::read_from_file(env("FUND_KEYPAIR_PATH"))
-            .expect("read wallet");
+        let wallet = Keypair::read_from_file(env("FUND_KEYPAIR_PATH")).expect("read wallet");
         let tip = 50_000;
         buy_pump_token(
             &wallet,
@@ -805,17 +731,15 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_bonding_curve_incomplete() {
-        let rpc_client =
-            RpcClient::new("https://api.mainnet-beta.solana.com".to_string());
+        let rpc_client = RpcClient::new("https://api.mainnet-beta.solana.com".to_string());
         let bonding_curve_pubkey = Pubkey::from_str(
             "Drhj4djqLsPyiA9qK2YmBngteFba8XhhvuQoBToW6pMS", // some shitter
         )
         .expect("parse bonding curve");
 
-        let bonding_curve =
-            get_bonding_curve(&rpc_client, bonding_curve_pubkey)
-                .await
-                .expect("get bonding curve");
+        let bonding_curve = get_bonding_curve(&rpc_client, bonding_curve_pubkey)
+            .await
+            .expect("get bonding curve");
 
         tracing::debug!(?bonding_curve, "bonding_curve");
 
@@ -827,17 +751,15 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_bonding_curve_complete() {
-        let rpc_client =
-            RpcClient::new("https://api.mainnet-beta.solana.com".to_string());
+        let rpc_client = RpcClient::new("https://api.mainnet-beta.solana.com".to_string());
         let bonding_curve_pubkey = Pubkey::from_str(
             "EB5tQ64HwNjaEoKKYAPkZqndwbULX249EuWSnkjfvR3y", // michi
         )
         .expect("parse bonding curve");
 
-        let bonding_curve =
-            get_bonding_curve(&rpc_client, bonding_curve_pubkey)
-                .await
-                .expect("get bonding curve");
+        let bonding_curve = get_bonding_curve(&rpc_client, bonding_curve_pubkey)
+            .await
+            .expect("get bonding curve");
 
         tracing::debug!(?bonding_curve, "bonding_curve");
 

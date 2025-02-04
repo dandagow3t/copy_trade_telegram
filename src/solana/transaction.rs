@@ -9,14 +9,15 @@ use solana_client::rpc_config::RpcSendTransactionConfig;
 use solana_client::rpc_config::RpcSimulateTransactionConfig;
 use solana_sdk::pubkey::Pubkey;
 use solana_sdk::transaction::Transaction;
-use solana_transaction_status::{
-    Encodable, EncodedTransaction, UiTransactionEncoding,
-};
+use solana_transaction_status::{Encodable, EncodedTransaction, UiTransactionEncoding};
 use std::cell::RefCell;
 use std::str::FromStr;
 use tracing::info;
 
 use crate::solana::util::env;
+
+use solana_sdk::compute_budget::ComputeBudgetInstruction;
+use solana_sdk::system_instruction;
 
 #[derive(Debug, Deserialize)]
 pub struct JitoResponse {
@@ -47,9 +48,10 @@ pub async fn send_jito_tx(tx: Transaction) -> Result<String> {
         .await
         .expect("send tx");
 
-    let jito_response = res.json::<JitoResponse>().await.map_err(|e| {
-        anyhow!("Failed to parse jito response: {}", e.to_string())
-    })?;
+    let jito_response = res
+        .json::<JitoResponse>()
+        .await
+        .map_err(|e| anyhow!("Failed to parse jito response: {}", e.to_string()))?;
 
     Ok(jito_response.result)
 }
@@ -67,9 +69,7 @@ pub async fn send_tx_fallback(tx: &Transaction) -> Result<String> {
             },
         )
         .await
-        .map_err(|e| {
-            anyhow!("Failed to send transaction: {}", e.to_string())
-        })?;
+        .map_err(|e| anyhow!("Failed to send transaction: {}", e.to_string()))?;
 
     tracing::info!(?signature, "send_tx_fallback");
 
@@ -88,10 +88,7 @@ pub async fn send_tx(tx: &Transaction) -> Result<String> {
             )
             .await?;
         if simres.value.err.is_some() {
-            return Err(anyhow!(
-                "Transaction simulation failed: {:?}",
-                simres
-            ));
+            return Err(anyhow!("Transaction simulation failed: {:?}", simres));
         }
     }
 
@@ -131,6 +128,34 @@ pub fn get_jito_tip_pubkey() -> Pubkey {
     ];
     let index = fast_random_0_to_7();
     Pubkey::from_str(PUBKEYS[index as usize]).expect("parse tip pubkey")
+}
+
+/// Adds a Jito tip instruction to a transaction
+#[inline]
+pub fn add_jito_tip(instructions: &mut Vec<solana_sdk::instruction::Instruction>, payer: &Pubkey) {
+    const TIP_LAMPORTS: u64 = 10_000; // 10k lamports tip
+    instructions.push(system_instruction::transfer(
+        payer,
+        &get_jito_tip_pubkey(),
+        TIP_LAMPORTS,
+    ));
+}
+
+/// Adds compute budget instructions with priority fee to a transaction
+#[inline]
+pub fn add_priority_fee(
+    instructions: &mut Vec<solana_sdk::instruction::Instruction>,
+    priority_fee: Option<u64>,
+    compute_units: Option<u32>,
+) {
+    // Default compute units if not specified
+    let units = compute_units.unwrap_or(200_000);
+    instructions.insert(0, ComputeBudgetInstruction::set_compute_unit_limit(units));
+
+    // Add priority fee if specified
+    if let Some(fee) = priority_fee {
+        instructions.insert(1, ComputeBudgetInstruction::set_compute_unit_price(fee));
+    }
 }
 
 #[cfg(test)]

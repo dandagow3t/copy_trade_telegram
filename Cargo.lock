@@ -923,6 +923,7 @@ dependencies = [
  "timed",
  "tokio",
  "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]

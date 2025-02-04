@@ -27,10 +27,7 @@ pub fn env(var: &str) -> String {
 }
 
 /// Helper function for pubkey serialize
-pub fn pubkey_to_string<S>(
-    pubkey: &Pubkey,
-    serializer: S,
-) -> Result<S::Ok, S::Error>
+pub fn pubkey_to_string<S>(pubkey: &Pubkey, serializer: S) -> Result<S::Ok, S::Error>
 where
     S: serde::Serializer,
 {
@@ -54,10 +51,7 @@ where
     s.parse().map_err(serde::de::Error::custom)
 }
 
-pub fn make_compute_budget_ixs(
-    price: u64,
-    max_units: u32,
-) -> Vec<Instruction> {
+pub fn make_compute_budget_ixs(price: u64, max_units: u32) -> Vec<Instruction> {
     vec![
         ComputeBudgetInstruction::set_compute_unit_price(price),
         ComputeBudgetInstruction::set_compute_unit_limit(max_units),
@@ -82,8 +76,7 @@ pub fn parse_holding(ata: RpcKeyedAccount) -> Result<Holding> {
             .as_str()
             .expect("amount")
             .parse::<u64>()?;
-        let mint =
-            Pubkey::from_str(parsed["info"]["mint"].as_str().expect("mint"))?;
+        let mint = Pubkey::from_str(parsed["info"]["mint"].as_str().expect("mint"))?;
         let ata = Pubkey::from_str(&ata.pubkey)?;
         Ok(Holding { mint, ata, amount })
     } else {
@@ -93,9 +86,7 @@ pub fn parse_holding(ata: RpcKeyedAccount) -> Result<Holding> {
 
 pub fn init_logger() -> Result<()> {
     let logs_level = match std::env::var("RUST_LOG") {
-        Ok(level) => {
-            LevelFilter::from_str(&level).unwrap_or(LevelFilter::Info)
-        }
+        Ok(level) => LevelFilter::from_str(&level).unwrap_or(LevelFilter::Info),
         Err(_) => LevelFilter::Info,
     };
 
@@ -133,10 +124,7 @@ pub fn make_rpc_client() -> RpcClient {
     RpcClient::new(rpc_url)
 }
 
-pub async fn verify_transaction(
-    signature: &str,
-    rpc_client: &RpcClient,
-) -> bool {
+pub async fn verify_transaction(signature: &str, rpc_client: &RpcClient) -> bool {
     // Wait for transaction confirmation
     let confirmation = rpc_client
         .confirm_transaction_with_commitment(
@@ -160,22 +148,41 @@ pub fn parse_pubkey(s: &str) -> Result<Pubkey> {
     }
 }
 
-pub async fn execute_solana_transaction<F, Fut>(
-    tx_creator: F,
-) -> Result<String>
+pub async fn execute_solana_transaction<F, Fut>(tx_creator: F) -> Result<String>
 where
     F: FnOnce(Pubkey) -> Fut + Send + 'static,
     Fut: Future<Output = Result<Transaction>> + Send + 'static,
 {
     let signer = SignerContext::current().await;
     let owner = Pubkey::from_str(&signer.pubkey())?;
+    tracing::info!("signer: {:?}", owner.to_string());
 
     let mut tx = wrap_unsafe(move || async move { tx_creator(owner).await })
         .await
         .map_err(|e| anyhow!("{:#?}", e))?;
 
+    wrap_unsafe(move || async move { signer.sign_and_send_solana_transaction(&mut tx).await })
+        .await
+        .map_err(|e| anyhow!("{:#?}", e))
+}
+
+pub async fn execute_solana_transaction_with_priority<F, Fut>(ix_creator: F) -> Result<String>
+where
+    F: FnOnce(Pubkey) -> Fut + Send + 'static,
+    Fut: Future<Output = Result<Vec<Instruction>>> + Send + 'static,
+{
+    let signer = SignerContext::current().await;
+    let owner = Pubkey::from_str(&signer.pubkey())?;
+    tracing::info!("signer: {:?}", owner.to_string());
+
+    let mut ix = wrap_unsafe(move || async move { ix_creator(owner).await })
+        .await
+        .map_err(|e| anyhow!("{:#?}", e))?;
+
     wrap_unsafe(move || async move {
-        signer.sign_and_send_solana_transaction(&mut tx).await
+        signer
+            .priority_sign_and_send_solana_transaction(&mut ix)
+            .await
     })
     .await
     .map_err(|e| anyhow!("{:#?}", e))
