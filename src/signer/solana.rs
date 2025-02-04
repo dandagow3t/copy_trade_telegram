@@ -6,7 +6,7 @@ use solana_sdk::transaction::Transaction;
 use std::sync::Arc;
 
 use crate::solana::blockhash::BLOCKHASH_CACHE;
-use crate::solana::transaction::{add_jito_tip, add_priority_fee, send_tx};
+use crate::solana::transaction::{add_jito_tip, send_tx};
 
 use super::TransactionSigner;
 
@@ -51,8 +51,11 @@ impl TransactionSigner for LocalSolanaSigner {
     ) -> Result<String> {
         let recent_blockhash = BLOCKHASH_CACHE.get_blockhash().await?;
         tracing::info!("recent_blockhash: {:?}", recent_blockhash);
-        add_priority_fee(ix, None, None);
+
+        // add_priority_fee(ix, None, None).await?;
         add_jito_tip(ix, &self.keypair.pubkey());
+
+        tracing::info!("ix: {:?}", ix);
         let mut tx = Transaction::new_with_payer(ix, Some(&self.keypair.pubkey()));
         tx.try_sign(&[&*self.keypair], recent_blockhash)?;
         send_tx(&tx).await

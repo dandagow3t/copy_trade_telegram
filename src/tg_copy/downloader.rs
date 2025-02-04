@@ -15,12 +15,14 @@
 //!
 
 use crate::tg_copy::db::{self, TradeDocument};
-use crate::tg_copy::parse_trade::parse_trade;
+use crate::tg_copy::parse_trade::{parse_trade, Trade, TradeClose, TradeOpen};
+use crate::trade::meme_trader::MemeTrader;
 use grammers_client::types::Chat;
 use grammers_client::{Client, Config, SignInError};
 use grammers_session::Session;
 use mongodb::Collection;
 use std::io::BufRead;
+use std::sync::Arc;
 use std::{env, time::Duration};
 use tokio::time;
 
@@ -147,6 +149,7 @@ async fn listen_for_new_messages(
     collection: &Collection<TradeDocument>,
     chat: &Chat,
 ) -> Result<()> {
+    let trader = Arc::new(MemeTrader::new());
     let mut interval = time::interval(Duration::from_secs(10));
     let mut counter = 0;
     loop {
@@ -165,15 +168,52 @@ async fn listen_for_new_messages(
 
             let text = message.text();
             if let Some(trade) = parse_trade(text) {
-                db::store_trade_db(
-                    collection,
-                    trade,
-                    message.id() as i64,
-                    text.to_string(),
-                    message.date().into(),
-                )
-                .await?;
-                println!("Stored new message {}", message.id());
+                let trade_clone = trade.clone();
+                let collection_clone = collection.clone();
+                let message_id = message.id() as i64;
+                let text_clone = text.to_string();
+                let message_date = message.date();
+                let trader = Arc::clone(&trader);
+
+                // Spawn DB storage task
+                let db_task = tokio::spawn(async move {
+                    db::store_trade_db(
+                        &collection_clone,
+                        trade_clone,
+                        message_id,
+                        text_clone,
+                        message_date.into(),
+                    )
+                    .await
+                });
+
+                // Spawn trading task
+                let trade_task = tokio::spawn(async move {
+                    match &trade {
+                        Trade::Open(open_trade) => {
+                            tracing::info!("It's buy");
+                            if open_trade.strategy == "prodybb120sec" {
+                                let tx_sig = trader
+                                    .buy_pump_fun(open_trade.contract_address.as_str(), 0.05, 500)
+                                    .await?;
+                                tracing::info!("tx sig: {}", tx_sig);
+                            }
+                        }
+                        Trade::Close(close_trade) => {
+                            tracing::info!("It's sell");
+                            if close_trade.strategy == "prodybb120sec" {
+                                let tx_sig = trader
+                                    .sell_pump_fun(close_trade.contract_address.as_str(), 100000)
+                                    .await?;
+                                tracing::info!("tx sig: {}", tx_sig);
+                            }
+                        }
+                    }
+                    Ok::<(), Box<dyn std::error::Error + Send + Sync>>(())
+                });
+
+                // join both tasks
+                let _ = tokio::join!(db_task, trade_task);
             }
         }
     }

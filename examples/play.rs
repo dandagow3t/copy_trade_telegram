@@ -18,11 +18,11 @@ async fn main() -> Result<()> {
         let token_address = "ARcgeDmzumpuCPtQDXi8gmBJjvWq7eFsgNh2sDYDpump";
         let sol_amount = 0.02;
         let slippage_bps = 500;
-        let token_amount = 679024319606;
+        let token_amount: u64 = 10000923892;
 
         // Get token info
-        // let info = trader.get_token_info(token_address).await?;
-        // println!("Token info: {:?}", info);
+        let info = trader.get_token_info(token_address).await?;
+        println!("Token info: {:?}", info);
 
         // let tx_sig = if info.is_pump_fun {
         // let tx_sig = trader
@@ -31,15 +31,8 @@ async fn main() -> Result<()> {
         // println!("Buy transaction: {}", tx_sig);
 
         // generate the sell transaction
-        let tx_sig = trader.sell_pump_fun(token_address, token_amount).await?;
-        println!("Sell transaction: {}", tx_sig);
-
-        // } else {
-        // Use Jupiter DEX aggregator for Raydium trades
-        // trader
-        // .buy_on_jupiter(token_address, sol_amount, slippage_bps)
-        // .await?
-        // };
+        // let tx_sig = trader.sell_pump_fun(token_address, token_amount).await?;
+        // println!("Sell transaction: {}", tx_sig);
 
         Ok(())
     })

@@ -2,7 +2,6 @@ use anyhow::{anyhow, Result};
 use rand::rngs::ThreadRng;
 use rand::thread_rng;
 use rand::Rng;
-use serde::Deserialize;
 use serde_json::json;
 use solana_client::nonblocking::rpc_client::RpcClient;
 use solana_client::rpc_config::RpcSendTransactionConfig;
@@ -16,14 +15,20 @@ use tracing::info;
 
 use crate::solana::util::env;
 
-use solana_sdk::compute_budget::ComputeBudgetInstruction;
 use solana_sdk::system_instruction;
+
+use serde::Deserialize;
 
 #[derive(Debug, Deserialize)]
 pub struct JitoResponse {
     pub jsonrpc: String,
     pub result: String,
     pub id: i64,
+}
+
+#[derive(Debug, Deserialize)]
+struct PriorityFeeResult {
+    priority_fee_estimate: u64,
 }
 
 #[timed::timed(duration(printer = "info!"))]
@@ -139,23 +144,6 @@ pub fn add_jito_tip(instructions: &mut Vec<solana_sdk::instruction::Instruction>
         &get_jito_tip_pubkey(),
         TIP_LAMPORTS,
     ));
-}
-
-/// Adds compute budget instructions with priority fee to a transaction
-#[inline]
-pub fn add_priority_fee(
-    instructions: &mut Vec<solana_sdk::instruction::Instruction>,
-    priority_fee: Option<u64>,
-    compute_units: Option<u32>,
-) {
-    // Default compute units if not specified
-    let units = compute_units.unwrap_or(200_000);
-    instructions.insert(0, ComputeBudgetInstruction::set_compute_unit_limit(units));
-
-    // Add priority fee if specified
-    if let Some(fee) = priority_fee {
-        instructions.insert(1, ComputeBudgetInstruction::set_compute_unit_price(fee));
-    }
 }
 
 #[cfg(test)]
