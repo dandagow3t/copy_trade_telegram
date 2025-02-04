@@ -1,3 +1,4 @@
+use anyhow::Result;
 use copy_trade_telegram::trade::meme_trader::MemeTrader;
 
 #[tokio::main]

@@ -4,7 +4,7 @@ use std::str::FromStr;
 use tracing::{info, warn};
 
 use crate::solana::{
-    dexscreener::{search_ticker, PairInfo},
+    dexscreener::search_ticker,
     pump::{fetch_metadata, get_bonding_curve, mint_to_pump_accounts},
     trade_pump::{create_buy_pump_fun_tx, create_sell_pump_fun_tx},
     util::{execute_solana_transaction, make_rpc_client},
