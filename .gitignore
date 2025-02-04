@@ -2,3 +2,4 @@
 .env
 messages.txt
 *.session
+*.pe

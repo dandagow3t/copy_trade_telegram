@@ -14,8 +14,8 @@
 //! message-[MSG_ID].[EXT]
 //!
 
-use crate::db::{self, TradeDocument};
-use crate::parse_trade::parse_trade;
+use crate::tg_copy::db::{self, TradeDocument};
+use crate::tg_copy::parse_trade::parse_trade;
 use grammers_client::types::Chat;
 use grammers_client::{Client, Config, SignInError};
 use grammers_session::Session;

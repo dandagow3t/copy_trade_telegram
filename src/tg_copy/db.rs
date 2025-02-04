@@ -1,8 +1,9 @@
-use crate::parse_trade::Trade;
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use mongodb::{bson::doc, options::IndexOptions, Collection, IndexModel};
 use serde::{Deserialize, Serialize};
+
+use crate::tg_copy::parse_trade::Trade;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub enum TradeType {
