@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::str::FromStr;
 
-#[derive(Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum OperationType {
     StopLoss,
     TakeProfit,
@@ -31,7 +31,7 @@ impl ToString for OperationType {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct TradeClose {
     pub strategy: String,
     pub op_type: OperationType,
@@ -42,7 +42,7 @@ pub struct TradeClose {
     pub contract_address: String,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct TradeOpen {
     pub strategy: String,
     pub token: String,
@@ -54,7 +54,7 @@ pub struct TradeOpen {
     pub market_cap: f64,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Trade {
     Open(TradeOpen),
     Close(TradeClose),
@@ -65,7 +65,7 @@ fn extract_contract_address(text: &str) -> Option<String> {
         ca_line
             .split("CA:")
             .nth(1)
-            .map(|s| s.trim().replace("pump", "").trim().to_string())
+            .map(|s| s.trim().trim().to_string())
     } else {
         None
     }

@@ -1,17 +1,28 @@
+use anyhow::Result;
+use copy_trade_telegram::{
+    signer::{solana::LocalSolanaSigner, SignerContext},
+    solana::util::env,
+    tg_copy::downloader::async_main,
+};
 use dotenv::dotenv;
-use downloader::async_main;
-use tokio::runtime;
+use std::sync::Arc;
+use tracing_subscriber::filter::LevelFilter;
+use tracing_subscriber::EnvFilter;
 
-mod db;
-mod downloader;
-mod parse_trade;
-type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
-
-fn main() -> Result<()> {
+#[tokio::main]
+async fn main() -> Result<()> {
     dotenv().ok();
-    runtime::Builder::new_multi_thread()
-        .enable_all()
-        .build()
-        .unwrap()
-        .block_on(async_main())
+
+    // Configure logging
+    let filter = EnvFilter::builder()
+        .with_default_directive(LevelFilter::INFO.into())
+        .parse_lossy("copy_trade_telegram=debug,grammers_session=warn");
+
+    tracing_subscriber::fmt().with_env_filter(filter).init();
+
+    let signer = LocalSolanaSigner::new(env("SOLANA_PRIVATE_KEY"));
+
+    SignerContext::with_signer(Arc::new(signer), async { async_main().await }).await?;
+
+    Ok(())
 }
