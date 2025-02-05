@@ -27,8 +27,7 @@ pub fn parse_holding(ata: RpcKeyedAccount) -> Result<Holding> {
             .as_str()
             .expect("amount")
             .parse::<u64>()?;
-        let mint =
-            Pubkey::from_str(parsed["info"]["mint"].as_str().expect("mint"))?;
+        let mint = Pubkey::from_str(parsed["info"]["mint"].as_str().expect("mint"))?;
         let ata = Pubkey::from_str(&ata.pubkey)?;
         Ok(Holding {
             mint: mint.to_string(),
@@ -40,15 +39,9 @@ pub fn parse_holding(ata: RpcKeyedAccount) -> Result<Holding> {
     }
 }
 
-pub async fn get_holdings(
-    rpc_client: &RpcClient,
-    owner: &Pubkey,
-) -> Result<Vec<Holding>> {
+pub async fn get_holdings(rpc_client: &RpcClient, owner: &Pubkey) -> Result<Vec<Holding>> {
     let atas = rpc_client
-        .get_token_accounts_by_owner(
-            owner,
-            TokenAccountsFilter::ProgramId(spl_token::id()),
-        )
+        .get_token_accounts_by_owner(owner, TokenAccountsFilter::ProgramId(spl_token::id()))
         .await?;
     let holdings = atas
         .iter()
@@ -57,4 +50,16 @@ pub async fn get_holdings(
         .collect::<Vec<Holding>>();
 
     Ok(holdings)
+}
+
+// Get ata balance for an owner and mint
+pub async fn get_ata_balance(
+    rpc_client: &RpcClient,
+    owner: &Pubkey,
+    mint: &Pubkey,
+) -> Result<String> {
+    let token_account = spl_associated_token_account::get_associated_token_address(&owner, &mint);
+    tracing::info!("token account: {}", token_account);
+    let ata = rpc_client.get_token_account_balance(&token_account).await?;
+    Ok(ata.amount)
 }

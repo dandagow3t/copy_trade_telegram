@@ -65,7 +65,7 @@ fn extract_contract_address(text: &str) -> Option<String> {
         ca_line
             .split("CA:")
             .nth(1)
-            .map(|s| s.trim().replace("pump", "").trim().to_string())
+            .map(|s| s.trim().trim().to_string())
     } else {
         None
     }

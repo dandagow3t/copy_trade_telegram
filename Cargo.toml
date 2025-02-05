@@ -46,7 +46,3 @@ tokio = { version = "1.43.0", default-features = false, features = [
 ] }
 tracing = "0.1.41"
 tracing-subscriber = "0.3.19"
-
-[[bin]]
-name = "run"
-path = "bin/run.rs"

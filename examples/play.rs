@@ -1,6 +1,5 @@
 use anyhow::Result;
 use copy_trade_telegram::signer::{solana::LocalSolanaSigner, SignerContext};
-use copy_trade_telegram::solana::data::TokenMetadata;
 use copy_trade_telegram::solana::util::env;
 use copy_trade_telegram::trade::meme_trader::MemeTrader;
 use dotenv::dotenv;

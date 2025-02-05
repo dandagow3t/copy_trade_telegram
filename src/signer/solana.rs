@@ -40,7 +40,6 @@ impl TransactionSigner for LocalSolanaSigner {
         tx: &mut solana_sdk::transaction::Transaction,
     ) -> Result<String> {
         let recent_blockhash = BLOCKHASH_CACHE.get_blockhash().await?;
-        tracing::info!("recent_blockhash: {:?}", recent_blockhash);
         tx.try_sign(&[&*self.keypair], recent_blockhash)?;
         send_tx(tx).await
     }
@@ -50,12 +49,7 @@ impl TransactionSigner for LocalSolanaSigner {
         ix: &mut Vec<solana_sdk::instruction::Instruction>,
     ) -> Result<String> {
         let recent_blockhash = BLOCKHASH_CACHE.get_blockhash().await?;
-        tracing::info!("recent_blockhash: {:?}", recent_blockhash);
-
-        // add_priority_fee(ix, None, None).await?;
         add_jito_tip(ix, &self.keypair.pubkey());
-
-        tracing::info!("ix: {:?}", ix);
         let mut tx = Transaction::new_with_payer(ix, Some(&self.keypair.pubkey()));
         tx.try_sign(&[&*self.keypair], recent_blockhash)?;
         send_tx(&tx).await

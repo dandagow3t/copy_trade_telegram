@@ -14,43 +14,54 @@
 //! message-[MSG_ID].[EXT]
 //!
 
+use crate::config::{DbConfig, TelegramConfig, TradingConfig};
+use crate::signer::solana::LocalSolanaSigner;
+use crate::signer::SignerContext;
+use crate::solana::balance::{get_ata_balance, get_holdings};
+use crate::solana::util::{env, make_rpc_client};
 use crate::tg_copy::db::{self, TradeDocument};
-use crate::tg_copy::parse_trade::{parse_trade, Trade, TradeClose, TradeOpen};
+use crate::tg_copy::parse_trade::{parse_trade, Trade};
 use crate::trade::meme_trader::MemeTrader;
+use anyhow::Result;
 use grammers_client::types::Chat;
 use grammers_client::{Client, Config, SignInError};
 use grammers_session::Session;
 use mongodb::Collection;
+use solana_client::nonblocking::rpc_client::RpcClient;
+use solana_sdk::pubkey::Pubkey;
 use std::io::BufRead;
+use std::str::FromStr;
 use std::sync::Arc;
-use std::{env, time::Duration};
+use std::time::Duration;
 use tokio::time;
-
-type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
 const SESSION_FILE: &str = "downloader.session";
 
 pub async fn async_main() -> Result<()> {
+    // Load configurations
+    let db_config = DbConfig::from_env()?;
+    let telegram_config = TelegramConfig::from_env()?;
+    let trading_config = TradingConfig::from_env()?;
+
+    // Print configs
+    println!("db_config: {:?}", db_config);
+    println!("telegram_config: {:?}", telegram_config);
+    println!("trading_config: {:?}", trading_config);
+
     // Connect to MongoDB
-    let mongodb_uri = env::var("MONGODB_URI").expect("MONGODB_URI not set.");
-    let client = mongodb::Client::with_uri_str(&mongodb_uri).await?;
-    let db_name = env::var("DB_NAME").expect("DB_NAME not set.");
-    let db = client.database(&db_name);
+    let client = mongodb::Client::with_uri_str(&db_config.mongodb_uri).await?;
+    let db = client.database(&db_config.db_name);
     let collection = db.collection::<TradeDocument>("trades");
 
     // Setup indexes
     db::setup_indexes(&collection).await?;
 
     // Connect to Telegram
-    let api_id = env::var("TG_ID").expect("TG_ID not set.").parse()?;
-    let api_hash = env::var("TG_HASH").expect("TG_HASH not set.");
-    let group_name = env::var("GROUP_NAME").expect("GROUP_NAME not set.");
-
     println!("Connecting to Telegram...");
     let client = Client::connect(Config {
         session: Session::load_file_or_create(SESSION_FILE)?,
-        api_id,
-        api_hash: api_hash.clone(),
+        api_id: telegram_config.api_id,
+        api_hash: telegram_config.api_hash.clone(),
         params: Default::default(),
     })
     .await?;
@@ -62,7 +73,7 @@ pub async fn async_main() -> Result<()> {
     println!("Connected!");
 
     // Find the target group
-    let chat = find_group(&client, &group_name).await?;
+    let chat = find_group(&client, &telegram_config.group_name).await?;
 
     // Get last processed message ID
     let last_message_id = db::get_last_message_id(&collection).await?.unwrap_or(0);
@@ -73,7 +84,16 @@ pub async fn async_main() -> Result<()> {
 
     // Then start listening for new messages
     println!("Listening for new messages...");
-    listen_for_new_messages(&client, &collection, &chat).await?;
+
+    listen_for_new_messages(
+        &client,
+        &collection,
+        &chat,
+        trading_config.position_size_sol,
+        trading_config.slippage_bps,
+        trading_config.trade_on,
+    )
+    .await?;
 
     Ok(())
 }
@@ -113,7 +133,7 @@ async fn find_group(client: &Client, group_name: &str) -> Result<Chat> {
         }
     }
 
-    Err("Group not found in your dialogs".into())
+    Err(anyhow::anyhow!("Group not found in your dialogs"))
 }
 
 async fn process_historical_messages(
@@ -148,10 +168,14 @@ async fn listen_for_new_messages(
     client: &Client,
     collection: &Collection<TradeDocument>,
     chat: &Chat,
+    position_size_sol: f64,
+    slippage_bps: u16,
+    execute: bool,
 ) -> Result<()> {
     let trader = Arc::new(MemeTrader::new());
-    let mut interval = time::interval(Duration::from_secs(10));
+    let mut interval = time::interval(Duration::from_secs(2));
     let mut counter = 0;
+
     loop {
         interval.tick().await;
         counter += 1;
@@ -175,6 +199,9 @@ async fn listen_for_new_messages(
                 let message_date = message.date();
                 let trader = Arc::clone(&trader);
 
+                // Get current signer before spawning tasks
+                let signer = SignerContext::current().await;
+
                 // Spawn DB storage task
                 let db_task = tokio::spawn(async move {
                     db::store_trade_db(
@@ -187,33 +214,55 @@ async fn listen_for_new_messages(
                     .await
                 });
 
-                // Spawn trading task
-                let trade_task = tokio::spawn(async move {
-                    match &trade {
-                        Trade::Open(open_trade) => {
-                            tracing::info!("It's buy");
-                            if open_trade.strategy == "prodybb120sec" {
-                                let tx_sig = trader
-                                    .buy_pump_fun(open_trade.contract_address.as_str(), 0.05, 500)
-                                    .await?;
-                                tracing::info!("tx sig: {}", tx_sig);
+                if execute {
+                    // Spawn trading task with signer context
+                    let trade_task = tokio::spawn(SignerContext::with_signer(signer, async move {
+                        match &trade {
+                            Trade::Open(open_trade) => {
+                                tracing::info!("It's buy");
+                                if open_trade.strategy == "prodybb120sec" {
+                                    let tx_sig = trader
+                                        .buy_pump_fun(
+                                            open_trade.contract_address.as_str(),
+                                            position_size_sol,
+                                            slippage_bps,
+                                        )
+                                        .await?;
+                                    tracing::info!("Buy tx: https://solscan.io/tx/{}", tx_sig);
+                                }
+                            }
+                            Trade::Close(close_trade) => {
+                                tracing::info!("It's sell");
+                                if close_trade.strategy == "prodybb120sec" {
+                                    // get account holdings for contract address
+                                    let owner = Pubkey::from_str(
+                                        "9AFb3BJTybJVvjWejqxstz9DUwYQxPepT94VCBi4escf",
+                                    )
+                                    .unwrap();
+                                    let holdings = get_ata_balance(
+                                        &RpcClient::new(env("SOLANA_RPC_URL")),
+                                        &owner,
+                                        &Pubkey::from_str(close_trade.contract_address.as_str())?,
+                                    )
+                                    .await
+                                    .unwrap();
+                                    tracing::info!("holdings: {:?}", holdings);
+                                    let tx_sig = trader
+                                        .sell_pump_fun(
+                                            close_trade.contract_address.as_str(),
+                                            holdings.parse::<u64>()?,
+                                        )
+                                        .await?;
+                                    tracing::info!("Sell tx: https://solscan.io/tx/{}", tx_sig);
+                                }
                             }
                         }
-                        Trade::Close(close_trade) => {
-                            tracing::info!("It's sell");
-                            if close_trade.strategy == "prodybb120sec" {
-                                let tx_sig = trader
-                                    .sell_pump_fun(close_trade.contract_address.as_str(), 100000)
-                                    .await?;
-                                tracing::info!("tx sig: {}", tx_sig);
-                            }
-                        }
-                    }
-                    Ok::<(), Box<dyn std::error::Error + Send + Sync>>(())
-                });
+                        Ok(())
+                    }));
 
-                // join both tasks
-                let _ = tokio::join!(db_task, trade_task);
+                    // join both tasks
+                    let _ = tokio::join!(db_task, trade_task);
+                }
             }
         }
     }
