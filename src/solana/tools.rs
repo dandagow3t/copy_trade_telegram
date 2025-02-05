@@ -64,11 +64,7 @@ pub async fn transfer_sol(to: String, amount: u64) -> Result<String> {
 /// param amount is token amount, accounting for decimals
 /// e.g. 1 Fartcoin = 1 * 10^6 (6 decimals)
 #[tool]
-pub async fn transfer_spl_token(
-    to: String,
-    amount: u64,
-    mint: String,
-) -> Result<String> {
+pub async fn transfer_spl_token(to: String, amount: u64, mint: String) -> Result<String> {
     execute_solana_transaction(move |owner| async move {
         create_transfer_spl_tx(
             &Pubkey::from_str(&to)?,
@@ -90,7 +86,6 @@ pub async fn get_public_key() -> Result<String> {
 #[tool]
 pub async fn get_sol_balance() -> Result<u64> {
     let signer = SignerContext::current().await.clone();
-    println!("Signer: {}", signer.pubkey());
     let owner = Pubkey::from_str(&signer.pubkey())?;
 
     wrap_unsafe(move || async move {
@@ -109,9 +104,7 @@ pub async fn get_spl_token_balance(mint: String) -> Result<(String, u8)> {
     let signer = SignerContext::current().await;
     let owner = Pubkey::from_str(&signer.pubkey())?;
     let mint = Pubkey::from_str(&mint)?;
-    let ata = spl_associated_token_account::get_associated_token_address(
-        &owner, &mint,
-    );
+    let ata = spl_associated_token_account::get_associated_token_address(&owner, &mint);
     let balance = wrap_unsafe(move || async move {
         create_rpc()
             .get_token_account_balance(&ata)
@@ -180,10 +173,7 @@ pub async fn buy_pump_fun_token(
 }
 
 #[tool]
-pub async fn sell_pump_fun_token(
-    mint: String,
-    token_amount: u64,
-) -> Result<String> {
+pub async fn sell_pump_fun_token(mint: String, token_amount: u64) -> Result<String> {
     execute_solana_transaction(move |owner| async move {
         create_sell_pump_fun_tx(mint, token_amount, &owner).await
     })
@@ -205,8 +195,6 @@ pub async fn get_portfolio() -> Result<Vec<PortfolioItem>> {
 }
 
 #[tool]
-pub async fn search_on_dex_screener(
-    phrase: String,
-) -> Result<DexScreenerResponse> {
+pub async fn search_on_dex_screener(phrase: String) -> Result<DexScreenerResponse> {
     search_ticker(phrase).await
 }

@@ -15,10 +15,9 @@
 //!
 
 use crate::config::{DbConfig, TelegramConfig, TradingConfig};
-use crate::signer::solana::LocalSolanaSigner;
 use crate::signer::SignerContext;
-use crate::solana::balance::{get_ata_balance, get_holdings};
-use crate::solana::util::{env, make_rpc_client};
+use crate::solana::balance::get_ata_balance;
+use crate::solana::util::env;
 use crate::tg_copy::db::{self, TradeDocument};
 use crate::tg_copy::parse_trade::{parse_trade, Trade};
 use crate::trade::meme_trader::MemeTrader;
@@ -29,7 +28,7 @@ use grammers_session::Session;
 use mongodb::Collection;
 use solana_client::nonblocking::rpc_client::RpcClient;
 use solana_sdk::pubkey::Pubkey;
-use std::io::BufRead;
+use std::io::{self, BufRead, Write};
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
@@ -44,9 +43,9 @@ pub async fn async_main() -> Result<()> {
     let trading_config = TradingConfig::from_env()?;
 
     // Print configs
-    println!("db_config: {:?}", db_config);
-    println!("telegram_config: {:?}", telegram_config);
-    println!("trading_config: {:?}", trading_config);
+    tracing::info!("{}", db_config);
+    tracing::info!("{}", telegram_config);
+    tracing::info!("{}", trading_config);
 
     // Connect to MongoDB
     let client = mongodb::Client::with_uri_str(&db_config.mongodb_uri).await?;
@@ -57,7 +56,7 @@ pub async fn async_main() -> Result<()> {
     db::setup_indexes(&collection).await?;
 
     // Connect to Telegram
-    println!("Connecting to Telegram...");
+    tracing::info!("Connecting to Telegram...");
     let client = Client::connect(Config {
         session: Session::load_file_or_create(SESSION_FILE)?,
         api_id: telegram_config.api_id,
@@ -67,23 +66,23 @@ pub async fn async_main() -> Result<()> {
     .await?;
 
     if !client.is_authorized().await? {
-        println!("First time setup - need to log in!");
+        tracing::info!("First time setup - need to log in!");
         handle_login(&client).await?;
     }
-    println!("Connected!");
+    tracing::info!("Connected!");
 
     // Find the target group
     let chat = find_group(&client, &telegram_config.group_name).await?;
 
     // Get last processed message ID
     let last_message_id = db::get_last_message_id(&collection).await?.unwrap_or(0);
-    println!("Starting from message ID: {}", last_message_id);
+    tracing::info!("Starting from message ID: {}", last_message_id);
 
     // Process historical messages first
     process_historical_messages(&client, &collection, &chat, last_message_id).await?;
 
     // Then start listening for new messages
-    println!("Listening for new messages...");
+    tracing::info!("Listening for new messages...");
 
     listen_for_new_messages(
         &client,
@@ -91,6 +90,7 @@ pub async fn async_main() -> Result<()> {
         &chat,
         trading_config.position_size_sol,
         trading_config.slippage_bps,
+        telegram_config.pool_frequency,
         trading_config.trade_on,
     )
     .await?;
@@ -99,7 +99,7 @@ pub async fn async_main() -> Result<()> {
 }
 
 async fn handle_login(client: &Client) -> Result<()> {
-    println!("Signing in...");
+    tracing::info!("Signing in...");
     let phone = prompt("Enter your phone number (international format): ")?;
     let token = client.request_login_code(&phone).await?;
     let code = prompt("Enter the code you received: ")?;
@@ -118,13 +118,13 @@ async fn handle_login(client: &Client) -> Result<()> {
         Err(e) => return Err(e.into()),
     }
 
-    println!("Signed in!");
+    tracing::info!("Signed in!");
     client.session().save_to_file(SESSION_FILE)?;
     Ok(())
 }
 
 async fn find_group(client: &Client, group_name: &str) -> Result<Chat> {
-    println!("Finding group {}...", group_name);
+    tracing::info!("Finding group {}...", group_name);
     let mut dialogs = client.iter_dialogs();
 
     while let Some(dialog) = dialogs.next().await? {
@@ -148,7 +148,7 @@ async fn process_historical_messages(
             break;
         }
         let text = message.text();
-        println!("Processing message {} - {}", message.id(), text);
+        tracing::info!("Processing message {} - {}", message.id(), text);
         if let Some(trade) = parse_trade(text) {
             db::store_trade_db(
                 collection,
@@ -158,7 +158,7 @@ async fn process_historical_messages(
                 message.date().into(),
             )
             .await?;
-            println!("Store message {}", message.id());
+            tracing::info!("Store message {}", message.id());
         }
     }
     Ok(())
@@ -170,18 +170,23 @@ async fn listen_for_new_messages(
     chat: &Chat,
     position_size_sol: f64,
     slippage_bps: u16,
+    pool_frequency: u64,
     execute: bool,
 ) -> Result<()> {
     let trader = Arc::new(MemeTrader::new());
-    let mut interval = time::interval(Duration::from_secs(2));
+    let mut interval = time::interval(Duration::from_secs(pool_frequency));
     let mut counter = 0;
-
+    tracing::info!("Listening for new messages...\n");
     loop {
         interval.tick().await;
-        counter += 1;
         if counter % 30 == 0 {
-            println!("#{} check", counter);
+            tracing::info!(".");
+        } else {
+            print!(".");
+            std::io::stdout().flush().unwrap();
         }
+        counter += 1;
+
         let last_message_id = db::get_last_message_id(collection).await?.unwrap_or(0);
         let mut messages = client.iter_messages(chat.clone());
 
@@ -269,8 +274,6 @@ async fn listen_for_new_messages(
 }
 
 fn prompt(message: &str) -> Result<String> {
-    use std::io::{self, Write};
-
     let stdout = io::stdout();
     let mut stdout = stdout.lock();
     stdout.write_all(message.as_bytes())?;
