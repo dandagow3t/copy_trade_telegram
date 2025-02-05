@@ -227,20 +227,40 @@ async fn listen_for_new_messages(
                     let trade_task = tokio::spawn(SignerContext::with_signer(signer, async move {
                         match &trade {
                             Trade::Open(open_trade) => {
-                                tracing::info!("It's buy");
+                                tracing::info!(
+                                    "Buy, {}, {}, {}",
+                                    open_trade.token,
+                                    open_trade.strategy,
+                                    open_trade.contract_address
+                                );
                                 if open_trade.strategy == filter_strategy_clone {
-                                    let tx_sig = trader
+                                    match trader
                                         .buy_pump_fun(
                                             open_trade.contract_address.as_str(),
                                             position_size_sol,
                                             slippage_bps,
                                         )
-                                        .await?;
-                                    tracing::info!("Buy tx: https://solscan.io/tx/{}", tx_sig);
+                                        .await
+                                    {
+                                        Ok(tx_sig) => {
+                                            tracing::info!(
+                                                "Buy tx: https://solscan.io/tx/{}",
+                                                tx_sig
+                                            );
+                                        }
+                                        Err(e) => {
+                                            tracing::error!("Buy transaction failed: {:?}", e);
+                                        }
+                                    }
                                 }
                             }
                             Trade::Close(close_trade) => {
-                                tracing::info!("It's sell");
+                                tracing::info!(
+                                    "Sell, {}, {}, {}",
+                                    close_trade.token,
+                                    close_trade.strategy,
+                                    close_trade.contract_address
+                                );
                                 if close_trade.strategy == filter_strategy_clone {
                                     // get account holdings for contract address
                                     let owner = Pubkey::from_str(
@@ -255,13 +275,23 @@ async fn listen_for_new_messages(
                                     .await
                                     .unwrap();
                                     tracing::info!("holdings: {:?}", holdings);
-                                    let tx_sig = trader
+                                    match trader
                                         .sell_pump_fun(
                                             close_trade.contract_address.as_str(),
                                             holdings.parse::<u64>()?,
                                         )
-                                        .await?;
-                                    tracing::info!("Sell tx: https://solscan.io/tx/{}", tx_sig);
+                                        .await
+                                    {
+                                        Ok(tx_sig) => {
+                                            tracing::info!(
+                                                "Sell tx: https://solscan.io/tx/{}",
+                                                tx_sig
+                                            );
+                                        }
+                                        Err(e) => {
+                                            tracing::error!("Sell transaction failed: {:?}", e);
+                                        }
+                                    }
                                 }
                             }
                         }
