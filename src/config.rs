@@ -41,14 +41,15 @@ pub struct TradingConfig {
     pub trade_on: bool,
     pub position_size_sol: f64,
     pub slippage_bps: u16,
+    pub filter_strategy: String,
 }
 
 impl fmt::Display for TradingConfig {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "\nTrading Config:\n  trade_on: {}\n  position_size_sol: {}\n  slippage_bps: {}",
-            self.trade_on, self.position_size_sol, self.slippage_bps
+            "\nTrading Config:\n  trade_on: {}\n  position_size_sol: {}\n  slippage_bps: {}\n  filter_strategy: {}",
+            self.trade_on, self.position_size_sol, self.slippage_bps, self.filter_strategy
         )
     }
 }
@@ -88,6 +89,7 @@ impl TradingConfig {
             slippage_bps: env::var("SLIPPAGE_BPS")
                 .expect("SLIPPAGE_BPS not set.")
                 .parse()?,
+            filter_strategy: env::var("FILTER_STRATEGY").expect("FILTER_STRATEGY not set."),
         })
     }
 }

@@ -16,7 +16,7 @@ async fn main() -> Result<()> {
     // Configure logging
     let filter = EnvFilter::builder()
         .with_default_directive(LevelFilter::INFO.into())
-        .parse_lossy("copy_trade_telegram=debug,grammers_session=warn");
+        .parse_lossy("copy_trade_telegram=info,grammers_session=warn");
 
     tracing_subscriber::fmt().with_env_filter(filter).init();
 

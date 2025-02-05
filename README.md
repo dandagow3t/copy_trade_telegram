@@ -1,49 +1,128 @@
-# Copy Trade Telegram
+# Copy Trade Telegram Bot
 
-A Rust application that connects to Telegram, downloads messages from a specified trading group, parses trading signals, and stores them in MongoDB for analysis.
+A Rust-based Telegram bot that monitors trading signals from specified groups and can automatically execute trades on Solana.
 
 ## Features
 
-- **Telegram Integration**: Connects to Telegram using the Grammers client library
-- **Message Parsing**: Parses two types of trading messages:
-  - Trade Open signals with buy price, market cap, and other metrics
-  - Trade Close signals with entry/exit prices and profit percentages
-- **MongoDB Storage**: Stores all trades in a normalized format with:
-  - Basic trade information (message ID, strategy, token, contract address)
-  - Trade-specific data (prices, market metrics, profit/loss)
-  - Original message content for reference
-- **Indexed Queries**: Supports efficient querying by:
-  - Unique message IDs
-  - Strategy and token combinations
+- Monitor Telegram groups for trading signals
+- Parse and store trade signals in MongoDB
+- Execute trades automatically on Solana
+- Support for various DEXes including Jupiter and Pump.fun
+- Configurable trade parameters including position size and slippage
+- Robust error handling and logging
 
 ## Prerequisites
 
 - Rust toolchain
-- MongoDB instance running locally (default: mongodb://localhost:27017)
-- Telegram API credentials:
-  - API ID
-  - API Hash
+- MongoDB instance
+- Telegram API credentials
+- Solana wallet and RPC endpoint
 
-## Environment Setup
+## Installation
 
-Create a `.env` file with your credentials:
-
+1. Clone the repository:
+```bash
+git clone https://github.com/yourusername/copy-trade-telegram
+cd copy-trade-telegram
 ```
-API_ID=your_api_id
-API_HASH=your_api_hash
-DB_NAME=your_db_name
+
+2. Copy the example environment file and fill in your credentials:
+```bash
+cp .env_example .env
+```
+
+3. Build the project:
+```bash
+cargo build --release
+```
+
+## Configuration
+
+Create a `.env` file with the following parameters:
+
+```env
+# Telegram Configuration
+TG_ID=                    # Your Telegram API ID
+TG_HASH=                  # Your Telegram API Hash
+TG_POOL_FREQUENCY=2       # How often to check for new messages (in seconds)
+GROUP_NAME=               # Target Telegram group name
+
+# Database Configuration
+DB_NAME=                  # MongoDB database name
 MONGODB_URI=mongodb://localhost:27017
-GROUP_NAME="your_tg_group_name"
-```
 
-The MongoDB connection string typically looks like:
-- Local instance: `mongodb://localhost:27017`
-- Remote instance: `mongodb+srv://username:password@cluster0.example.mongodb.net`
+# Solana Configuration
+SOLANA_RPC_URL=          # Solana RPC endpoint
+SOLANA_PRIVATE_KEY=      # Your wallet's private key in base58 format
+
+# Trading Configuration
+TRADE_ON=true            # Enable/disable automatic trading
+POSITION_SIZE_SOL=0.005  # Position size in SOL
+SLIPPAGE_BPS=500        # Slippage tolerance in basis points (500 = 5%)
+```
 
 ## Usage
 
-Run the program with:
-
+Run the bot:
 ```bash
-cargo run
+cargo run --release
 ```
+
+## Features
+
+### Telegram Integration
+- Connects to specified Telegram groups
+- Monitors and parses trading signals
+- Stores trade information in MongoDB
+
+### Trading Capabilities
+- Automatic trade execution on Solana
+- Support for multiple DEXes:
+  - Jupiter Protocol
+  - Pump.fun
+- Configurable position sizes and slippage
+- Support for both market buys and sells
+
+### Solana Integration
+- Native Solana transaction handling
+- Support for SPL tokens
+- Automatic ATA (Associated Token Account) creation
+- Priority fee management
+- Transaction retry mechanism
+
+### Database
+- MongoDB integration for trade storage
+- Indexed collections for efficient querying
+- Trade history tracking
+
+## Development
+
+### Project Structure
+- `src/tg_copy/` - Telegram integration and signal parsing
+- `src/solana/` - Solana blockchain interaction
+- `src/signer/` - Transaction signing implementations
+- `src/config/` - Configuration management
+- `src/common/` - Shared utilities
+
+### Testing
+
+Run the test suite:
+```bash
+cargo test
+```
+
+## Contributing
+
+1. Fork the repository
+2. Create your feature branch (`git checkout -b feature/amazing-feature`)
+3. Commit your changes (`git commit -m 'Add some amazing feature'`)
+4. Push to the branch (`git push origin feature/amazing-feature`)
+5. Open a Pull Request
+
+## License
+
+This project is licensed under the MIT License - see the LICENSE file for details.
+
+## Disclaimer
+
+This software is for educational purposes only. Use at your own risk. The developers are not responsible for any financial losses incurred through the use of this software.

@@ -88,6 +88,7 @@ pub async fn async_main() -> Result<()> {
         &client,
         &collection,
         &chat,
+        trading_config.filter_strategy,
         trading_config.position_size_sol,
         trading_config.slippage_bps,
         telegram_config.pool_frequency,
@@ -168,6 +169,7 @@ async fn listen_for_new_messages(
     client: &Client,
     collection: &Collection<TradeDocument>,
     chat: &Chat,
+    filter_strategy: String,
     position_size_sol: f64,
     slippage_bps: u16,
     pool_frequency: u64,
@@ -221,11 +223,12 @@ async fn listen_for_new_messages(
 
                 if execute {
                     // Spawn trading task with signer context
+                    let filter_strategy_clone = filter_strategy.clone();
                     let trade_task = tokio::spawn(SignerContext::with_signer(signer, async move {
                         match &trade {
                             Trade::Open(open_trade) => {
                                 tracing::info!("It's buy");
-                                if open_trade.strategy == "prodybb120sec" {
+                                if open_trade.strategy == filter_strategy_clone {
                                     let tx_sig = trader
                                         .buy_pump_fun(
                                             open_trade.contract_address.as_str(),
@@ -238,7 +241,7 @@ async fn listen_for_new_messages(
                             }
                             Trade::Close(close_trade) => {
                                 tracing::info!("It's sell");
-                                if close_trade.strategy == "prodybb120sec" {
+                                if close_trade.strategy == filter_strategy_clone {
                                     // get account holdings for contract address
                                     let owner = Pubkey::from_str(
                                         "9AFb3BJTybJVvjWejqxstz9DUwYQxPepT94VCBi4escf",
