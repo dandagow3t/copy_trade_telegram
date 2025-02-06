@@ -88,7 +88,7 @@ pub async fn async_main() -> Result<()> {
         &client,
         &collection,
         &chat,
-        trading_config.filter_strategy,
+        trading_config.filter_strategies,
         trading_config.position_size_sol,
         trading_config.slippage_bps,
         telegram_config.pool_frequency,
@@ -169,7 +169,7 @@ async fn listen_for_new_messages(
     client: &Client,
     collection: &Collection<TradeDocument>,
     chat: &Chat,
-    filter_strategy: String,
+    filter_strategies: Vec<String>,
     position_size_sol: f64,
     slippage_bps: u16,
     pool_frequency: u64,
@@ -223,7 +223,7 @@ async fn listen_for_new_messages(
 
                 if execute {
                     // Spawn trading task with signer context
-                    let filter_strategy_clone = filter_strategy.clone();
+                    let filter_strategies_clone = filter_strategies.clone();
                     let trade_task = tokio::spawn(SignerContext::with_signer(signer, async move {
                         match &trade {
                             Trade::Open(open_trade) => {
@@ -233,7 +233,10 @@ async fn listen_for_new_messages(
                                     open_trade.strategy,
                                     open_trade.contract_address
                                 );
-                                if open_trade.strategy == filter_strategy_clone {
+                                if filter_strategies_clone
+                                    .iter()
+                                    .any(|s| s == &open_trade.strategy)
+                                {
                                     match trader
                                         .buy_pump_fun(
                                             open_trade.contract_address.as_str(),
@@ -261,7 +264,10 @@ async fn listen_for_new_messages(
                                     close_trade.strategy,
                                     close_trade.contract_address
                                 );
-                                if close_trade.strategy == filter_strategy_clone {
+                                if filter_strategies_clone
+                                    .iter()
+                                    .any(|s| s == &close_trade.strategy)
+                                {
                                     // get account holdings for contract address
                                     let owner = Pubkey::from_str(
                                         "9AFb3BJTybJVvjWejqxstz9DUwYQxPepT94VCBi4escf",
