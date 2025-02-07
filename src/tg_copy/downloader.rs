@@ -90,7 +90,6 @@ pub async fn async_main() -> Result<()> {
     process_historical_messages(&client, &collection, &chat, last_message_id).await?;
 
     // Then start listening for new messages
-    tracing::info!("Listening for new messages...");
 
     listen_for_new_messages(
         &client,

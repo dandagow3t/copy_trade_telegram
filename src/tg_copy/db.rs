@@ -93,7 +93,12 @@ pub async fn store_trade_db(
             profit_pct: Some(close.profit_pct),
         },
     };
-
+    tracing::info!(
+        "storing trade {}/{:?}/{}",
+        doc.strategy,
+        doc.trade_type,
+        doc.token,
+    );
     collection.insert_one(doc, None).await?;
     Ok(())
 }
