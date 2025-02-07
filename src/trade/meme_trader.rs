@@ -5,14 +5,12 @@ use tracing::{info, warn};
 
 use crate::solana::{
     dexscreener::search_ticker,
-    pump::{fetch_metadata, get_bonding_curve, mint_to_pump_accounts},
+    pump::fetch_metadata,
     trade_pump::{create_buy_pump_fun_ix, create_sell_pump_fun_ix},
     util::{execute_solana_transaction_with_priority, make_rpc_client},
 };
 
-pub struct MemeTrader {
-    rpc_client: solana_client::nonblocking::rpc_client::RpcClient,
-}
+pub struct MemeTrader {}
 
 #[derive(Debug)]
 pub struct MemeTokenInfo {
@@ -28,9 +26,7 @@ pub struct MemeTokenInfo {
 
 impl MemeTrader {
     pub fn new() -> Self {
-        Self {
-            rpc_client: make_rpc_client(),
-        }
+        Self {}
     }
 
     /// Get information about a meme token from either Pump.fun or Dexscreener
@@ -87,16 +83,16 @@ impl MemeTrader {
         info!("Buying {} SOL worth of token {}", sol_amount, token_address);
 
         // Verify it's a Pump.fun token first
-        let mint = Pubkey::from_str(token_address)?;
-        let pump_accounts = mint_to_pump_accounts(&mint);
+        // let mint = Pubkey::from_str(token_address)?;
+        // let pump_accounts = mint_to_pump_accounts(&mint);
 
         // Get bonding curve to verify token exists
-        let bonding_curve =
-            get_bonding_curve(&self.rpc_client, pump_accounts.bonding_curve).await?;
+        // let bonding_curve =
+        //     get_bonding_curve(&self.rpc_client, pump_accounts.bonding_curve).await?;
 
-        if bonding_curve.complete {
-            return Err(anyhow!("Token is already completed/rugged"));
-        }
+        // if bonding_curve.complete {
+        //     return Err(anyhow!("Token is already completed/rugged"));
+        // }
 
         let token_address = token_address.to_string();
 
