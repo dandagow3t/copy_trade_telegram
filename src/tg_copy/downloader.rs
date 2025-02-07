@@ -28,13 +28,21 @@ use grammers_session::Session;
 use mongodb::Collection;
 use solana_client::nonblocking::rpc_client::RpcClient;
 use solana_sdk::pubkey::Pubkey;
+use std::collections::HashMap;
 use std::io::{self, BufRead, Write};
 use std::str::FromStr;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use tokio::sync::Mutex;
 use tokio::time;
 
 const SESSION_FILE: &str = "downloader.session";
+
+#[derive(Debug)]
+struct TradeMemory {
+    last_trade_time: u64,
+    strategy: String,
+}
 
 pub async fn async_main() -> Result<()> {
     // Load configurations
@@ -176,6 +184,10 @@ async fn listen_for_new_messages(
     execute: bool,
 ) -> Result<()> {
     let trader = Arc::new(MemeTrader::new());
+    let trade_memory: Arc<Mutex<HashMap<String, TradeMemory>>> =
+        Arc::new(Mutex::new(HashMap::new()));
+    const TRADE_TIMEOUT_SECS: u64 = 300;
+
     let mut interval = time::interval(Duration::from_secs(pool_frequency));
     let mut counter = 0;
     tracing::info!("Listening for new messages...\n");
@@ -205,6 +217,7 @@ async fn listen_for_new_messages(
                 let text_clone = text.to_string();
                 let message_date = message.date();
                 let trader = Arc::clone(&trader);
+                let trade_memory = Arc::clone(&trade_memory);
 
                 // Get current signer before spawning tasks
                 let signer = SignerContext::current().await;
@@ -222,20 +235,48 @@ async fn listen_for_new_messages(
                 });
 
                 if execute {
-                    // Spawn trading task with signer context
                     let filter_strategies_clone = filter_strategies.clone();
                     let trade_task = tokio::spawn(SignerContext::with_signer(signer, async move {
                         match &trade {
                             Trade::Open(open_trade) => {
                                 tracing::info!(
-                                    "Buy, {}, {}, {}",
+                                    "Buy signal received: {}, {}, {}",
                                     open_trade.token,
                                     open_trade.strategy,
                                     open_trade.contract_address
                                 );
-                                if filter_strategies_clone
-                                    .iter()
-                                    .any(|s| s == &open_trade.strategy)
+
+                                let should_execute = {
+                                    let memory = trade_memory.lock().await;
+                                    let current_time = SystemTime::now()
+                                        .duration_since(UNIX_EPOCH)
+                                        .unwrap()
+                                        .as_secs();
+
+                                    if let Some(last_trade) =
+                                        memory.get(&open_trade.contract_address)
+                                    {
+                                        if current_time - last_trade.last_trade_time
+                                            > TRADE_TIMEOUT_SECS
+                                        {
+                                            true
+                                        } else {
+                                            tracing::info!(
+                                                "Skipping duplicate trade for {} (previous strategy: {})",
+                                                open_trade.token,
+                                                last_trade.strategy
+                                            );
+                                            false
+                                        }
+                                    } else {
+                                        true
+                                    }
+                                };
+
+                                if should_execute
+                                    && filter_strategies_clone
+                                        .iter()
+                                        .any(|s| s == &open_trade.strategy)
                                 {
                                     match trader
                                         .buy_pump_fun(
@@ -246,6 +287,17 @@ async fn listen_for_new_messages(
                                         .await
                                     {
                                         Ok(tx_sig) => {
+                                            let mut memory = trade_memory.lock().await;
+                                            memory.insert(
+                                                open_trade.contract_address.clone(),
+                                                TradeMemory {
+                                                    last_trade_time: SystemTime::now()
+                                                        .duration_since(UNIX_EPOCH)
+                                                        .unwrap()
+                                                        .as_secs(),
+                                                    strategy: open_trade.strategy.clone(),
+                                                },
+                                            );
                                             tracing::info!(
                                                 "Buy tx: https://solscan.io/tx/{}",
                                                 tx_sig
@@ -299,6 +351,8 @@ async fn listen_for_new_messages(
                                         }
                                     }
                                 }
+                                let mut memory = trade_memory.lock().await;
+                                memory.remove(&close_trade.contract_address);
                             }
                         }
                         Ok(())
