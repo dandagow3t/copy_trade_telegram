@@ -1,5 +1,6 @@
 use borsh::{BorshDeserialize, BorshSerialize};
 use log::{debug, error, warn};
+use serde::Serialize;
 use solana_account_decoder::UiAccountEncoding;
 use solana_client::{nonblocking::rpc_client::RpcClient, rpc_config::RpcAccountInfoConfig};
 use solana_sdk::{commitment_config::CommitmentConfig, pubkey::Pubkey};
@@ -122,6 +123,17 @@ impl RaydiumPoolLayout {
     pub fn parse(data: &[u8]) -> Result<Self, std::io::Error> {
         Self::try_from_slice(data)
     }
+}
+
+/// Raydium swap instruction accounts
+#[derive(Debug, Serialize)]
+pub struct RaydiumAccounts {
+    pub amm: Pubkey,
+    pub amm_open_orders: Pubkey,
+    pub amm_target_orders: Pubkey,
+    pub pool_coin_token_account: Pubkey,
+    pub pool_pc_token_account: Pubkey,
+    pub serum_market: Pubkey,
 }
 
 pub async fn get_raydium_pool(
@@ -258,22 +270,31 @@ pub async fn get_raydium_pool(
     }
 }
 
+pub async fn get_raydium_accounts(
+    rpc_client: &RpcClient,
+    raydium_pool_pubkey: Pubkey,
+) -> Result<RaydiumAccounts> {
+    match get_raydium_pool(rpc_client, raydium_pool_pubkey).await {
+        Ok(pool) => Ok(RaydiumAccounts {
+            amm: raydium_pool_pubkey,
+            amm_open_orders: pool.open_orders,
+            amm_target_orders: pool.target_orders,
+            pool_coin_token_account: pool.base_vault,
+            pool_pc_token_account: pool.quote_vault,
+            serum_market: pool.market_id,
+        }),
+        Err(e) => Err(e),
+    }
+}
+
 #[derive(Debug)]
-pub struct RaydiumAccounts {
-    pub amm: Pubkey,
-    pub amm_authority: Pubkey,
-    pub amm_open_orders: Pubkey,
-    pub amm_target_orders: Pubkey,
-    pub pool_coin_token_account: Pubkey,
-    pub pool_pc_token_account: Pubkey,
-    pub serum_program: Pubkey,
-    pub serum_market: Pubkey,
-    pub serum_bids: Pubkey,
-    pub serum_asks: Pubkey,
-    pub serum_event_queue: Pubkey,
-    pub serum_coin_vault_account: Pubkey,
-    pub serum_pc_vault_account: Pubkey,
-    pub serum_vault_signer: Pubkey,
+pub struct SerumAccounts {
+    pub bids: Pubkey,
+    pub asks: Pubkey,
+    pub event_queue: Pubkey,
+    pub coin_vault_account: Pubkey,
+    pub pc_vault_account: Pubkey,
+    pub vault_signer: Pubkey,
 }
 
 #[derive(Debug)]
@@ -302,45 +323,237 @@ impl SwapInstructionData {
 }
 
 pub const RAYDIUM_V4_PROGRAM_ID: &str = "675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8";
-pub const TOKEN_PROGRAM_ID: &str = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA";
+pub const SERUM_PROGRAM_ID: &str = "srmqPvymJeFKQ4zGQed1GFppgkRHL9kaELCbyksJtPX";
 
-pub fn make_raydium_swap_ix(
-    accounts: &RaydiumAccounts,
-    user_source_token_account: Pubkey,
-    user_destination_token_account: Pubkey,
-    user_authority: Pubkey,
-    amount_in: u64,
-    minimum_amount_out: u64,
-) -> Result<Instruction> {
-    let program_id = Pubkey::from_str(RAYDIUM_V4_PROGRAM_ID)?;
-    let token_program = Pubkey::from_str(TOKEN_PROGRAM_ID)?;
+#[derive(BorshSerialize, BorshDeserialize, Debug, Clone)]
+pub struct SerumMarketLayout {
+    pub blob_5: [u8; 5],
+    pub account_flags: [u8; 8],
+    pub own_address: Pubkey,
+    pub vault_signer_nonce: u64,
+    pub base_mint: Pubkey,
+    pub quote_mint: Pubkey,
+    pub base_vault: Pubkey,
+    pub base_deposits_total: u64,
+    pub base_fees_accrued: u64,
+    pub quote_vault: Pubkey,
+    pub quote_deposits_total: u64,
+    pub quote_fees_accrued: u64,
+    pub quote_dust_threshold: u64,
+    pub request_queue: Pubkey,
+    pub event_queue: Pubkey,
+    pub bids: Pubkey,
+    pub asks: Pubkey,
+    pub base_lot_size: u64,
+    pub quote_lot_size: u64,
+    pub fee_rate_bps: u64,
+    pub referrer_rebates_accrued: u64,
+    pub blob_7: [u8; 7],
+}
 
-    let accounts = vec![
-        AccountMeta::new_readonly(token_program, false),
-        AccountMeta::new(accounts.amm, false),
-        AccountMeta::new_readonly(accounts.amm_authority, false),
-        AccountMeta::new(accounts.amm_open_orders, false),
-        AccountMeta::new(accounts.amm_target_orders, false),
-        AccountMeta::new(accounts.pool_coin_token_account, false),
-        AccountMeta::new(accounts.pool_pc_token_account, false),
-        AccountMeta::new_readonly(accounts.serum_program, false),
-        AccountMeta::new(accounts.serum_market, false),
-        AccountMeta::new(accounts.serum_bids, false),
-        AccountMeta::new(accounts.serum_asks, false),
-        AccountMeta::new(accounts.serum_event_queue, false),
-        AccountMeta::new(accounts.serum_coin_vault_account, false),
-        AccountMeta::new(accounts.serum_pc_vault_account, false),
-        AccountMeta::new_readonly(accounts.serum_vault_signer, false),
-        AccountMeta::new(user_source_token_account, false),
-        AccountMeta::new(user_destination_token_account, false),
-        AccountMeta::new(user_authority, true),
-    ];
+impl SerumMarketLayout {
+    pub const LEN: usize = 5 + // blob_5
+        8 + // account_flags
+        32 + // own_address
+        8 + // vault_signer_nonce
+        32 + // base_mint
+        32 + // quote_mint
+        32 + // base_vault
+        8 + // base_deposits_total
+        8 + // base_fees_accrued
+        32 + // quote_vault
+        8 + // quote_deposits_total
+        8 + // quote_fees_accrued
+        8 + // quote_dust_threshold
+        32 + // request_queue
+        32 + // event_queue
+        32 + // bids
+        32 + // asks
+        8 + // base_lot_size
+        8 + // quote_lot_size
+        8 + // fee_rate_bps
+        8 + // referrer_rebates_accrued
+        7; // blob_7
 
-    let data = SwapInstructionData::new(amount_in, minimum_amount_out).pack();
+    pub fn parse(data: &[u8]) -> Result<Self, std::io::Error> {
+        Self::try_from_slice(data)
+    }
+}
 
-    Ok(Instruction {
-        program_id,
-        accounts,
-        data,
-    })
+pub async fn get_serum_market(
+    rpc_client: &RpcClient,
+    market_pubkey: Pubkey,
+) -> Result<SerumMarketLayout> {
+    const MAX_RETRIES: u32 = 5;
+    const INITIAL_DELAY_MS: u64 = 200;
+    let mut retries = 0;
+    let mut delay = Duration::from_millis(INITIAL_DELAY_MS);
+
+    loop {
+        match rpc_client
+            .get_account_with_config(
+                &market_pubkey,
+                RpcAccountInfoConfig {
+                    encoding: Some(UiAccountEncoding::Base64),
+                    commitment: Some(CommitmentConfig::processed()),
+                    data_slice: None,
+                    min_context_slot: None,
+                },
+            )
+            .await
+        {
+            Ok(res) => {
+                if let Some(account) = res.value {
+                    let data_length = account.data.len();
+                    tracing::info!(
+                        "Data length vs expected: {:?}/{:?}",
+                        data_length,
+                        SerumMarketLayout::LEN
+                    );
+
+                    let data: [u8; SerumMarketLayout::LEN] = account
+                        .data
+                        .try_into()
+                        .map_err(|_| anyhow!("Invalid data length: {}", data_length))?;
+
+                    let mut offset = 0;
+                    let blob_5 = data[offset..offset + 5].try_into()?;
+                    offset += 5;
+                    let account_flags = data[offset..offset + 8].try_into()?;
+                    offset += 8;
+                    let own_address = Pubkey::try_from_slice(&data[offset..offset + 32])?;
+                    offset += 32;
+                    let vault_signer_nonce =
+                        u64::from_le_bytes(data[offset..offset + 8].try_into()?);
+                    offset += 8;
+                    let base_mint = Pubkey::try_from_slice(&data[offset..offset + 32])?;
+                    offset += 32;
+                    let quote_mint = Pubkey::try_from_slice(&data[offset..offset + 32])?;
+                    offset += 32;
+                    let base_vault = Pubkey::try_from_slice(&data[offset..offset + 32])?;
+                    offset += 32;
+                    let base_deposits_total =
+                        u64::from_le_bytes(data[offset..offset + 8].try_into()?);
+                    offset += 8;
+                    let base_fees_accrued =
+                        u64::from_le_bytes(data[offset..offset + 8].try_into()?);
+                    offset += 8;
+                    let quote_vault = Pubkey::try_from_slice(&data[offset..offset + 32])?;
+                    offset += 32;
+                    let quote_deposits_total =
+                        u64::from_le_bytes(data[offset..offset + 8].try_into()?);
+                    offset += 8;
+                    let quote_fees_accrued =
+                        u64::from_le_bytes(data[offset..offset + 8].try_into()?);
+                    offset += 8;
+                    let quote_dust_threshold =
+                        u64::from_le_bytes(data[offset..offset + 8].try_into()?);
+                    offset += 8;
+                    let request_queue = Pubkey::try_from_slice(&data[offset..offset + 32])?;
+                    offset += 32;
+                    let event_queue = Pubkey::try_from_slice(&data[offset..offset + 32])?;
+                    offset += 32;
+                    let bids = Pubkey::try_from_slice(&data[offset..offset + 32])?;
+                    offset += 32;
+                    let asks = Pubkey::try_from_slice(&data[offset..offset + 32])?;
+                    offset += 32;
+                    let base_lot_size = u64::from_le_bytes(data[offset..offset + 8].try_into()?);
+                    offset += 8;
+                    let quote_lot_size = u64::from_le_bytes(data[offset..offset + 8].try_into()?);
+                    offset += 8;
+                    let fee_rate_bps = u64::from_le_bytes(data[offset..offset + 8].try_into()?);
+                    offset += 8;
+                    let referrer_rebates_accrued =
+                        u64::from_le_bytes(data[offset..offset + 8].try_into()?);
+                    offset += 8;
+                    let blob_7 = data[offset..offset + 7].try_into()?;
+
+                    let layout = SerumMarketLayout {
+                        blob_5,
+                        account_flags,
+                        own_address,
+                        vault_signer_nonce,
+                        base_mint,
+                        quote_mint,
+                        base_vault,
+                        base_deposits_total,
+                        base_fees_accrued,
+                        quote_vault,
+                        quote_deposits_total,
+                        quote_fees_accrued,
+                        quote_dust_threshold,
+                        request_queue,
+                        event_queue,
+                        bids,
+                        asks,
+                        base_lot_size,
+                        quote_lot_size,
+                        fee_rate_bps,
+                        referrer_rebates_accrued,
+                        blob_7,
+                    };
+
+                    debug!("Parsed SerumMarketLayout: {:?}", layout);
+                    return Ok(layout);
+                } else {
+                    if retries >= MAX_RETRIES {
+                        error!("Max retries reached. Account not found.");
+                        return Err(anyhow!("Account not found after max retries"));
+                    }
+                    warn!(
+                        "Attempt {} failed: Account not found. Retrying in {:?}...",
+                        retries + 1,
+                        delay
+                    );
+                    sleep(delay).await;
+                    retries += 1;
+                    delay = Duration::from_millis(INITIAL_DELAY_MS * 2u64.pow(retries));
+                    continue;
+                }
+            }
+            Err(e) => {
+                if retries >= MAX_RETRIES {
+                    error!("Max retries reached. Last error: {}", e);
+                    return Err(anyhow!("Max retries reached. Last error: {}", e));
+                }
+                warn!(
+                    "Attempt {} failed: {}. Retrying in {:?}...",
+                    retries + 1,
+                    e,
+                    delay
+                );
+                sleep(delay).await;
+                retries += 1;
+                delay = Duration::from_millis(INITIAL_DELAY_MS * 2u64.pow(retries));
+            }
+        }
+    }
+}
+
+pub async fn get_serum_accounts(
+    rpc_client: &RpcClient,
+    serum_market_pubkey: Pubkey,
+) -> Result<SerumAccounts> {
+    match get_serum_market(rpc_client, serum_market_pubkey).await {
+        Ok(market) => {
+            let vault_signer = Pubkey::create_program_address(
+                &[
+                    serum_market_pubkey.as_ref(),
+                    &market.vault_signer_nonce.to_le_bytes(),
+                ],
+                &Pubkey::from_str(SERUM_PROGRAM_ID)?,
+            )
+            .map_err(|e| anyhow!("Failed to create program address: {}", e))?;
+
+            Ok(SerumAccounts {
+                bids: market.bids,
+                asks: market.asks,
+                event_queue: market.event_queue,
+                coin_vault_account: market.base_vault,
+                pc_vault_account: market.quote_vault,
+                vault_signer,
+            })
+        }
+        Err(e) => Err(e),
+    }
 }

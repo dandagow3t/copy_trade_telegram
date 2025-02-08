@@ -3,6 +3,8 @@ use solana_client::nonblocking::rpc_client::RpcClient;
 use solana_sdk::{instruction::Instruction, pubkey::Pubkey};
 use std::str::FromStr;
 
+use crate::solana::raydium::{get_raydium_accounts, get_serum_accounts, get_serum_market};
+
 use super::raydium::get_raydium_pool;
 
 fn apply_slippage(amount: u64, slippage_bps: u16) -> u64 {
@@ -21,6 +23,13 @@ pub async fn create_raydium_swap_ix(
     let pool_pubkey = Pubkey::from_str(&pool_address)?;
     let pool_accounts = get_raydium_pool(rpc_client, pool_pubkey).await?;
     tracing::info!("RaydiumPoolLayout {:#?}", pool_accounts);
+    let accounts = get_raydium_accounts(rpc_client, pool_pubkey).await?;
+    tracing::info!("RaydiumAccounts {:#?}", accounts);
+    let serum_market = get_serum_market(rpc_client, accounts.serum_market).await?;
+    tracing::info!("SerumMarket {:#?}", serum_market);
+    let serum_accounts = get_serum_accounts(rpc_client, accounts.serum_market).await?;
+    tracing::info!("SerumAccounts {:#?}", serum_accounts);
+
     // let swap_ix = make_raydium_swap_ix(
     //     &pool_accounts,
     //     source_token_account,
@@ -30,7 +39,8 @@ pub async fn create_raydium_swap_ix(
     //     minimum_amount_out,
     // )?;
 
-    Ok(vec![])
+    // Ok(vec![])
+    Err(anyhow::anyhow!("Not implemented"))
 }
 
 // pub async fn create_raydium_swap_tx(
