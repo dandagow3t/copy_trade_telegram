@@ -8,7 +8,7 @@ use crate::solana::{
     dexscreener::{search_ticker, DexScreenerResponse},
     pump::{fetch_metadata, PumpTokenInfo},
     trade_pump::{create_buy_pump_fun_ix, create_sell_pump_fun_ix},
-    trade_raydium::create_raydium_sol_swap_ix,
+    trade_raydium::{create_raydium_sol_swap_ix, create_raydium_token_swap_ix},
     util::{execute_solana_transaction_with_priority, make_rpc_client},
 };
 
@@ -82,6 +82,53 @@ impl MemeTrader {
         }
     }
 
+    /// Meta buy function is all ecompasing buy function.
+    /// 1. It first checks token metadata on Pump.fun API.
+    ///  1.1 If the metadata are found and the bonding curve is not complete it will buy on Pump.fun.
+    ///  1.2 If the metadata are found and the bonding curve is complete it will buy from Raydium.
+    /// 2. If the metadata are not found on Pump.fun it will check on Dexscreener.
+    /// 3. If the metadata is not found neither on Pump.fun nor on Dexscreener it will fallback to Pump.fun.
+    pub async fn meta_sell(&self, token_address: &str, token_amount: u64) -> Result<String> {
+        let token_info = self.get_token_info(token_address).await;
+        match token_info {
+            Ok(TokenInfo::Pump(pump_info)) => {
+                tracing::info!("Token is on Pump.fun {:#?}", pump_info);
+                match self.sell_pump_fun(token_address, token_amount).await {
+                    Ok(tx_sig) => Ok(tx_sig),
+                    Err(e) => {
+                        tracing::error!("Error selling on Pump.fun: {:#?}", e);
+                        match self
+                            .sell_raydium(
+                                token_address,
+                                pump_info.raydium_pool.as_str(),
+                                token_amount,
+                            )
+                            .await
+                        {
+                            Ok(tx_sig) => Ok(tx_sig),
+                            Err(e) => {
+                                tracing::error!("Error buying from Raydium: {:#?}", e);
+                                Err(e)
+                            }
+                        }
+                    }
+                }
+            }
+            Ok(TokenInfo::Dexscreener(dex_info)) => {
+                tracing::info!("Token is on Dexscreener {:#?}", dex_info);
+                // self.buy_dexscreener(token_address, sol_amount, slippage_bps)
+                //     .await
+                Ok(String::new())
+            }
+            _ => {
+                tracing::info!(
+                    "Token info not found on Pump.fun or Dexscreener. Fallback to Pump.fun"
+                );
+                self.sell_pump_fun(token_address, token_amount).await
+            }
+        }
+    }
+
     /// Get information about a meme token from either Pump.fun or Dexscreener
     pub async fn get_token_info(&self, token_address: &str) -> Result<TokenInfo> {
         // Try Pump.fun first
@@ -132,6 +179,17 @@ impl MemeTrader {
         .await
     }
 
+    /// Sell a token on Pump.fun
+    pub async fn sell_pump_fun(&self, token_address: &str, token_amount: u64) -> Result<String> {
+        info!("Selling {} tokens of {}", token_amount, token_address);
+
+        let token_address = token_address.to_string();
+        execute_solana_transaction_with_priority(move |owner| async move {
+            create_sell_pump_fun_ix(token_address.to_string(), token_amount, &owner).await
+        })
+        .await
+    }
+
     pub async fn buy_raydium(
         &self,
         token_address: &str,
@@ -141,7 +199,7 @@ impl MemeTrader {
     ) -> Result<String> {
         info!(
             "Raydium: try buying {} SOL worth of token {} on Raydium pool {}",
-            sol_amount, "?", raydium_pool
+            sol_amount, token_address, raydium_pool
         );
         let raydium_pool = raydium_pool.to_string();
         let token_address = token_address.to_string();
@@ -160,42 +218,31 @@ impl MemeTrader {
         .await
     }
 
-    /// Sell a token on Pump.fun
-    pub async fn sell_pump_fun(&self, token_address: &str, token_amount: u64) -> Result<String> {
-        info!("Selling {} tokens of {}", token_amount, token_address);
-
+    pub async fn sell_raydium(
+        &self,
+        token_address: &str,
+        raydium_pool: &str,
+        token_amount: u64,
+    ) -> Result<String> {
+        info!(
+            "Raydium: try selling {} tokens of {} on Raydium pool {}",
+            token_amount, token_address, raydium_pool
+        );
+        let raydium_pool = raydium_pool.to_string();
         let token_address = token_address.to_string();
+
         execute_solana_transaction_with_priority(move |owner| async move {
-            create_sell_pump_fun_ix(token_address.to_string(), token_amount, &owner).await
+            create_raydium_token_swap_ix(
+                raydium_pool,
+                token_amount as u64,
+                Pubkey::from_str(token_address.as_str())?, // Token
+                &make_rpc_client(),
+                &owner,
+            )
+            .await
         })
         .await
     }
-
-    // pub async fn buy_on_jupiter(
-    //     &self,
-    //     token_address: &str,
-    //     sol_amount: f64,
-    //     slippage_bps: u16,
-    // ) -> Result<String> {
-    //     info!(
-    //         "Buying {} SOL worth of token {} on Jupiter",
-    //         sol_amount, token_address
-    //     );
-
-    //     let token_address = token_address.to_string();
-    //     execute_solana_transactions(move |owner| async move {
-    //         create_trade_transaction(
-    //             "So11111111111111111111111111111111111111112".to_string(), // WSOL
-    //             sol_to_lamports(sol_amount),
-    //             token_address.to_string(),
-    //             slippage_bps,
-    //             &owner,
-    //         )
-    //         .await
-    //     })
-    //     .await
-    // }
-    // // TODO: Add Raydium trading functions when needed
 }
 
 #[cfg(test)]

@@ -361,7 +361,7 @@ async fn listen_for_new_messages(
                                     .unwrap();
                                     tracing::info!("holdings: {:?}", holdings);
                                     match trader
-                                        .sell_pump_fun(
+                                        .meta_sell(
                                             close_trade.contract_address.as_str(),
                                             holdings.parse::<u64>()?,
                                         )

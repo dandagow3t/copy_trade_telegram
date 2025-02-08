@@ -5,6 +5,7 @@ use std::str::FromStr;
 pub enum OperationType {
     StopLoss,
     TakeProfit,
+    TrailingStopLoss,
     Manual,
 }
 
@@ -15,6 +16,7 @@ impl FromStr for OperationType {
         match s {
             "SL" => Ok(OperationType::StopLoss),
             "TP" => Ok(OperationType::TakeProfit),
+            "TSL" => Ok(OperationType::TrailingStopLoss),
             "Manual" => Ok(OperationType::Manual),
             _ => Err(format!("Unknown operation type: {}", s)),
         }
@@ -26,6 +28,7 @@ impl ToString for OperationType {
         match self {
             OperationType::StopLoss => "SL".to_string(),
             OperationType::TakeProfit => "TP".to_string(),
+            OperationType::TrailingStopLoss => "TSL".to_string(),
             OperationType::Manual => "Manual".to_string(),
         }
     }
@@ -120,9 +123,11 @@ pub fn parse_trade_close(message: &str) -> Option<TradeClose> {
     }
 
     let token = parts[1].to_string();
+
     let op_type = match parts[2] {
         "SL" => OperationType::StopLoss,
         "TP" => OperationType::TakeProfit,
+        "TSL" => OperationType::TrailingStopLoss,
         "Manual" => OperationType::Manual,
         _ => return None,
     };
@@ -132,19 +137,19 @@ pub fn parse_trade_close(message: &str) -> Option<TradeClose> {
 
     // Parse prices
     let price_parts: Vec<&str> = price_line.split("→").collect();
-    if price_parts.len() != 2 {
-        return None;
-    }
+    // if price_parts.len() != 2 {
+    //     return None;
+    // }
 
-    let entry_price = parse_price(price_parts[0].trim())?;
+    let entry_price = parse_price(price_parts[0].trim()).unwrap_or(0f64);
 
     // Extract exit price and profit percentage
     let exit_price_parts: Vec<&str> = price_parts[1].split('(').collect();
-    if exit_price_parts.is_empty() {
-        return None;
-    }
+    // if exit_price_parts.is_empty() {
+    //     return None;
+    // }
 
-    let exit_price = parse_price(exit_price_parts[0].trim())?;
+    let exit_price = parse_price(exit_price_parts[0].trim()).unwrap_or(0f64);
 
     // Parse profit percentage
     let profit_str = exit_price_parts
@@ -152,10 +157,9 @@ pub fn parse_trade_close(message: &str) -> Option<TradeClose> {
         .trim_end_matches(')')
         .trim_end_matches('%');
 
-    let profit_pct = profit_str.parse::<f64>().ok()?;
+    let profit_pct = profit_str.parse::<f64>().ok().unwrap_or(0f64);
 
     let contract_address = extract_contract_address(message)?;
-
     Some(TradeClose {
         strategy,
         op_type,

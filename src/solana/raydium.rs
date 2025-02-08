@@ -554,6 +554,7 @@ pub fn calculate_minimum_amount_out(
     amount_in: u64,
     slippage_tolerance: f64, // e.g., 0.01 for 1%
 ) -> u64 {
+    return 0;
     // First get the swap fee
     let fee_numerator = pool_state.swap_fee_numerator;
     let fee_denominator = pool_state.swap_fee_denominator;
