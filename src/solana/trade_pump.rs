@@ -9,10 +9,7 @@ use solana_sdk::pubkey::Pubkey;
 use solana_sdk::transaction::Transaction;
 use std::str::FromStr;
 
-fn apply_slippage(amount: u64, slippage_bps: u16) -> u64 {
-    let slippage = amount * slippage_bps as u64 / 10_000;
-    amount - slippage
-}
+use super::util::apply_slippage;
 
 pub async fn create_buy_pump_fun_ix(
     mint: String,

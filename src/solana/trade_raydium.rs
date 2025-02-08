@@ -1,99 +1,112 @@
+use crate::solana::{
+    raydium::{get_raydium_accounts, get_serum_accounts, get_serum_market},
+    util::generate_random_seed,
+};
 use anyhow::Result;
 use solana_client::nonblocking::rpc_client::RpcClient;
-use solana_sdk::{instruction::Instruction, pubkey::Pubkey};
+use solana_sdk::{
+    instruction::Instruction, program_pack::Pack, pubkey::Pubkey, signer::Signer,
+    system_instruction, system_program,
+};
+use spl_associated_token_account::get_associated_token_address;
+use spl_token::{self, instruction as token_instruction};
+
 use std::str::FromStr;
 
-use crate::solana::raydium::{get_raydium_accounts, get_serum_accounts, get_serum_market};
-
-use super::raydium::get_raydium_pool;
+use super::raydium::{
+    calculate_minimum_amount_out, extract_raydium_accounts, get_raydium_pool, make_raydium_swap_ix,
+};
 
 fn apply_slippage(amount: u64, slippage_bps: u16) -> u64 {
     let slippage = amount * slippage_bps as u64 / 10_000;
     amount - slippage
 }
 
-pub async fn create_raydium_swap_ix(
+pub async fn create_raydium_sol_swap_ix(
     pool_address: String,
     amount_in: u64,
     slippage_bps: u16,
-    minimum_amount_out: u64,
+    destination_token: Pubkey,
     rpc_client: &RpcClient,
     owner: &Pubkey,
 ) -> Result<Vec<Instruction>> {
+    let mut ixs = vec![];
+
     let pool_pubkey = Pubkey::from_str(&pool_address)?;
-    let pool_accounts = get_raydium_pool(rpc_client, pool_pubkey).await?;
-    tracing::info!("RaydiumPoolLayout {:#?}", pool_accounts);
-    let accounts = get_raydium_accounts(rpc_client, pool_pubkey).await?;
-    tracing::info!("RaydiumAccounts {:#?}", accounts);
-    let serum_market = get_serum_market(rpc_client, accounts.serum_market).await?;
-    tracing::info!("SerumMarket {:#?}", serum_market);
-    let serum_accounts = get_serum_accounts(rpc_client, accounts.serum_market).await?;
-    tracing::info!("SerumAccounts {:#?}", serum_accounts);
+    let pool_accounts = get_raydium_pool(rpc_client, &pool_pubkey).await?;
+    // tracing::info!("RaydiumPoolLayout {:?}", pool_accounts);
+    let raydium_accounts = extract_raydium_accounts(pool_pubkey, &pool_accounts);
+    // tracing::info!("RaydiumAccounts {:?}", accounts);
+    // let serum_market = get_serum_market(rpc_client, accounts.serum_market).await?;
+    // tracing::info!("SerumMarket {:?}", serum_market);
+    let serum_accounts = get_serum_accounts(rpc_client, raydium_accounts.serum_market).await?;
+    // tracing::info!("SerumAccounts {:?}", serum_accounts);
 
-    // let swap_ix = make_raydium_swap_ix(
-    //     &pool_accounts,
-    //     source_token_account,
-    //     destination_token_account,
-    //     *owner,
-    //     amount_in,
-    //     minimum_amount_out,
-    // )?;
+    // Generate seed for temporary WSOL account
+    let seed = &generate_random_seed();
 
-    // Ok(vec![])
-    Err(anyhow::anyhow!("Not implemented"))
+    // Derive temporary WSOL account with seed
+    let user_source_token_account = Pubkey::create_with_seed(owner, seed, &spl_token::id())?;
+
+    // Calculate rent-exempt balance for token account
+    let rent = rpc_client
+        .get_minimum_balance_for_rent_exemption(spl_token::state::Account::LEN)
+        .await?;
+
+    let amount_in_with_rent = amount_in + rent;
+
+    let minimum_amount_out =
+        calculate_minimum_amount_out(&pool_accounts, amount_in_with_rent, slippage_bps as f64);
+
+    // Create temporary WSOL account
+    ixs.push(system_instruction::create_account_with_seed(
+        owner,
+        &user_source_token_account,
+        owner,
+        seed,
+        amount_in + rent, // Total amount: swap amount + rent
+        spl_token::state::Account::LEN as u64,
+        &spl_token::id(),
+    ));
+
+    // Initialize WSOL account
+    ixs.push(token_instruction::initialize_account(
+        &spl_token::id(),
+        &user_source_token_account,
+        &spl_token::native_mint::id(),
+        owner,
+    )?);
+
+    // Generate user ATA for destination token
+    let user_destination_token_account = get_associated_token_address(owner, &destination_token);
+
+    ixs.push(
+        spl_associated_token_account::instruction::create_associated_token_account_idempotent(
+            &owner,
+            &owner,
+            &destination_token,
+            &spl_token::id(),
+        ),
+    );
+
+    ixs.push(make_raydium_swap_ix(
+        raydium_accounts,
+        serum_accounts,
+        user_source_token_account,
+        user_destination_token_account,
+        *owner,
+        amount_in,
+        minimum_amount_out,
+    )?);
+
+    // 4. Close temporary WSOL account to recover rent
+    ixs.push(token_instruction::close_account(
+        &spl_token::id(),
+        &user_source_token_account,
+        owner,
+        owner,
+        &[owner],
+    )?);
+
+    Ok(ixs)
 }
-
-// pub async fn create_raydium_swap_tx(
-//     pool_address: String,
-//     amount_in: u64,
-//     minimum_amount_out: u64,
-//     source_token_account: Pubkey,
-//     destination_token_account: Pubkey,
-//     owner: &Pubkey,
-// ) -> Result<Transaction> {
-//     let swap_ix = create_raydium_swap_ix(
-//         pool_address,
-//         amount_in,
-//         minimum_amount_out,
-//         source_token_account,
-//         destination_token_account,
-//         owner,
-//     )
-//     .await?;
-
-//     let tx = Transaction::new_with_payer(swap_ix.as_slice(), Some(owner));
-//     Ok(tx)
-// }
-
-// #[cfg(test)]
-// mod tests {
-//     use super::*;
-//     use crate::solana::util::{make_rpc_client, make_test_signer};
-//     use solana_sdk::native_token::sol_to_lamports;
-
-//     #[tokio::test]
-//     async fn test_raydium_swap() {
-//         let signer = make_test_signer();
-//         let owner = Pubkey::from_str(&signer.pubkey()).unwrap();
-
-//         // Example test values - these would need to be replaced with real accounts
-//         let pool_address = "675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8".to_string();
-//         let source_token =
-//             Pubkey::from_str("6fx8Wn8JhFiWCZMRzgXPadVKHaMtid4xD45guX4TjGGw").unwrap();
-//         let dest_token = Pubkey::from_str("38sFLvusozdxb1p2V2GovRywmF9DeLxVeVw8rK6PYe8a").unwrap();
-
-//         let mut tx = create_raydium_swap_tx(
-//             pool_address,
-//             sol_to_lamports(0.05), // 0.05 SOL
-//             2823548469,            // Minimum amount out
-//             source_token,
-//             dest_token,
-//             &owner,
-//         )
-//         .await
-//         .unwrap();
-
-//         let result = signer.sign_and_send_solana_transaction(&mut tx).await;
-//         assert!(result.is_ok(), "{:?}", result);
-//     }
-// }

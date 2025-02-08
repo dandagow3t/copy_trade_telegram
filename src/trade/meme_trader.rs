@@ -6,9 +6,9 @@ use tracing::{info, warn};
 
 use crate::solana::{
     dexscreener::{search_ticker, DexScreenerResponse},
-    pump::{fetch_metadata, get_bonding_curve, mint_to_pump_accounts, PumpTokenInfo},
+    pump::{fetch_metadata, PumpTokenInfo},
     trade_pump::{create_buy_pump_fun_ix, create_sell_pump_fun_ix},
-    trade_raydium::create_raydium_swap_ix,
+    trade_raydium::create_raydium_sol_swap_ix,
     util::{execute_solana_transaction_with_priority, make_rpc_client},
 };
 
@@ -49,7 +49,12 @@ impl MemeTrader {
                     Err(e) => {
                         tracing::error!("Error buying on Pump.fun: {:#?}", e);
                         match self
-                            .buy_raydium(pump_info.raydium_pool.as_str(), sol_amount, slippage_bps)
+                            .buy_raydium(
+                                token_address,
+                                pump_info.raydium_pool.as_str(),
+                                sol_amount,
+                                slippage_bps,
+                            )
                             .await
                         {
                             Ok(tx_sig) => Ok(tx_sig),
@@ -129,6 +134,7 @@ impl MemeTrader {
 
     pub async fn buy_raydium(
         &self,
+        token_address: &str,
         raydium_pool: &str,
         sol_amount: f64,
         slippage_bps: u16,
@@ -138,12 +144,14 @@ impl MemeTrader {
             sol_amount, "?", raydium_pool
         );
         let raydium_pool = raydium_pool.to_string();
+        let token_address = token_address.to_string();
+
         execute_solana_transaction_with_priority(move |owner| async move {
-            create_raydium_swap_ix(
-                raydium_pool.to_string(),
+            create_raydium_sol_swap_ix(
+                raydium_pool,
                 sol_to_lamports(sol_amount),
                 slippage_bps,
-                0,
+                Pubkey::from_str(token_address.as_str())?,
                 &make_rpc_client(),
                 &owner,
             )

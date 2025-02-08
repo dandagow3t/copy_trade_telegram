@@ -138,7 +138,7 @@ pub struct RaydiumAccounts {
 
 pub async fn get_raydium_pool(
     rpc_client: &RpcClient,
-    raydium_pool_pubkey: Pubkey,
+    raydium_pool_pubkey: &Pubkey,
 ) -> Result<RaydiumPoolLayout> {
     const MAX_RETRIES: u32 = 5;
     const INITIAL_DELAY_MS: u64 = 200;
@@ -274,7 +274,7 @@ pub async fn get_raydium_accounts(
     rpc_client: &RpcClient,
     raydium_pool_pubkey: Pubkey,
 ) -> Result<RaydiumAccounts> {
-    match get_raydium_pool(rpc_client, raydium_pool_pubkey).await {
+    match get_raydium_pool(rpc_client, &raydium_pool_pubkey).await {
         Ok(pool) => Ok(RaydiumAccounts {
             amm: raydium_pool_pubkey,
             amm_open_orders: pool.open_orders,
@@ -284,6 +284,20 @@ pub async fn get_raydium_accounts(
             serum_market: pool.market_id,
         }),
         Err(e) => Err(e),
+    }
+}
+
+pub fn extract_raydium_accounts(
+    raydium_pool_pubkey: Pubkey,
+    pool: &RaydiumPoolLayout,
+) -> RaydiumAccounts {
+    RaydiumAccounts {
+        amm: raydium_pool_pubkey,
+        amm_open_orders: pool.open_orders,
+        amm_target_orders: pool.target_orders,
+        pool_coin_token_account: pool.base_vault,
+        pool_pc_token_account: pool.quote_vault,
+        serum_market: pool.market_id,
     }
 }
 
@@ -297,33 +311,10 @@ pub struct SerumAccounts {
     pub vault_signer: Pubkey,
 }
 
-#[derive(Debug)]
-pub struct SwapInstructionData {
-    pub instruction: u8,
-    pub amount_in: u64,
-    pub minimum_amount_out: u64,
-}
-
-impl SwapInstructionData {
-    pub fn new(amount_in: u64, minimum_amount_out: u64) -> Self {
-        Self {
-            instruction: 9, // Swap instruction discriminator
-            amount_in,
-            minimum_amount_out,
-        }
-    }
-
-    pub fn pack(&self) -> Vec<u8> {
-        let mut data = Vec::with_capacity(17);
-        data.push(self.instruction);
-        data.extend_from_slice(&self.amount_in.to_le_bytes());
-        data.extend_from_slice(&self.minimum_amount_out.to_le_bytes());
-        data
-    }
-}
-
-pub const RAYDIUM_V4_PROGRAM_ID: &str = "675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8";
-pub const SERUM_PROGRAM_ID: &str = "srmqPvymJeFKQ4zGQed1GFppgkRHL9kaELCbyksJtPX";
+pub const RAYDIUM_V4_PROGRAM: &str = "675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8";
+pub const RAYDIUM_V4_AUTHORITY: &str = "5Q544fKrFoe6tsEbD7S8EmxGTJYAKtTVhAW5Q5pge4j1";
+pub const SERUM_PROGRAM: &str = "srmqPvymJeFKQ4zGQed1GFppgkRHL9kaELCbyksJtPX";
+pub const RAYDIUM_V4_BUY_METHOD: u8 = 9;
 
 #[derive(BorshSerialize, BorshDeserialize, Debug, Clone)]
 pub struct SerumMarketLayout {
@@ -541,7 +532,7 @@ pub async fn get_serum_accounts(
                     serum_market_pubkey.as_ref(),
                     &market.vault_signer_nonce.to_le_bytes(),
                 ],
-                &Pubkey::from_str(SERUM_PROGRAM_ID)?,
+                &Pubkey::from_str(SERUM_PROGRAM)?,
             )
             .map_err(|e| anyhow!("Failed to create program address: {}", e))?;
 
@@ -556,4 +547,115 @@ pub async fn get_serum_accounts(
         }
         Err(e) => Err(e),
     }
+}
+
+pub fn calculate_minimum_amount_out(
+    pool_state: &RaydiumPoolLayout,
+    amount_in: u64,
+    slippage_tolerance: f64, // e.g., 0.01 for 1%
+) -> u64 {
+    // First get the swap fee
+    let fee_numerator = pool_state.swap_fee_numerator;
+    let fee_denominator = pool_state.swap_fee_denominator;
+
+    // Get current pool ratios
+    let base_amount = pool_state.swap_base_in_amount;
+    let quote_amount = pool_state.swap_quote_out_amount;
+
+    // Calculate the swap fee
+    let fee_amount = amount_in
+        .checked_mul(fee_numerator)
+        .unwrap()
+        .checked_div(fee_denominator)
+        .unwrap();
+
+    // Amount after fee
+    let amount_in_after_fees = amount_in.checked_sub(fee_amount).unwrap();
+
+    // Calculate expected output using constant product formula (x * y = k)
+    let amount_out = quote_amount
+        .checked_mul(amount_in_after_fees as u128)
+        .unwrap()
+        .checked_div(
+            base_amount
+                .checked_add(amount_in_after_fees as u128)
+                .unwrap(),
+        )
+        .unwrap();
+
+    // Apply slippage tolerance
+    let min_amount_out = (amount_out as f64 * (1.0 - slippage_tolerance)) as u64;
+
+    min_amount_out
+}
+
+#[derive(BorshSerialize)]
+struct SwapInstructionData {
+    // Single byte discriminator for swap
+    instruction: u8, // Value: 9
+    amount_in: u64,
+    minimum_amount_out: u64,
+}
+
+/// Interact With Raydium Liquidity Pool V4 (675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8)
+/// Input Accounts
+/// #1 - Token Program: TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA (Program)
+/// #2 - Amm: Raydium (SOL-RETAIL) Market (Writable)
+/// #3 - Amm Authority: Raydium Authority V4
+/// #4 - Amm Open Orders: 5C7RNQnRwt8ardd7Qa98HHf6iMX9WGzr2o9aJWdR14yy (Writable)
+/// #5 - Amm Target Orders: BEYQBu8Ye7b7WzNqky5TmsyomUnzsEdLCKqhYU6sCGvr (Writable)
+/// #6 - Pool Coin Token Account: Raydium (SOL-RETAIL) Pool 1 (Writable)
+/// #7 - Pool Pc Token Account: Raydium (SOL-RETAIL) Pool 2 (Writable)
+/// #8 - Serum Program: OpenBook Program
+/// #9 - Serum Market: FeEi5J2EDfKYEf9MpHi3XG55urywmC1VGfx99edn4P9t (Writable)
+/// #10 - Serum Bids: 3hE83ULCHPY3gXrzYtmD7fHM7Btou7upwgSQBV68joD7 (Writable)
+/// #11 - Serum Asks: D1pPxAwZCgNfUZuDT9jYLycis1aXneRbtguhNgNkHQja (Writable)
+/// #12 - Serum Event Queue: 3LB32L4CFim46jbEvLJwAbRKNf4EZrxY1Mg7DP7oUG7p (Writable)
+/// #13 - Serum Coin Vault Account: 6MjEX7oWjnDcPAczF2bpnPicbcWAeMt9YjUtTrQf8e5y (Writable)
+/// #14 - Serum Pc Vault Account: BPKhBfBgXdputYoGW42vbijXs1czHmm3eiiD7FNdiSbM (Writable)
+/// #15 - Serum Vault Signer: EHQjfmkBqziuGzL8EpZxCXTFGSXsUEomuoWMSDCYKbGk
+/// #16 - User Source Token Account: 6fx8Wn8JhFiWCZMRzgXPadVKHaMtid4xD45guX4TjGGw (Writable)
+/// #17 - User Destination Token Account: 38sFLvusozdxb1p2V2GovRywmF9DeLxVeVw8rK6PYe8a (Writable)
+/// #18 - User Source Owner: 9AFb3BJTybJVvjWejqxstz9DUwYQxPepT94VCBi4escf (Writable, Signer, Fee Payer)
+pub fn make_raydium_swap_ix(
+    raydium_accounts: RaydiumAccounts,
+    serum_accounts: SerumAccounts,
+    user_source_token_account: Pubkey,
+    user_destination_token_account: Pubkey,
+    owner: Pubkey,
+    amount_in: u64,
+    minimum_amount_out: u64,
+) -> Result<Instruction> {
+    let accounts: [AccountMeta; 18] = [
+        AccountMeta::new_readonly(spl_token::ID, false),
+        AccountMeta::new(raydium_accounts.amm, false),
+        AccountMeta::new_readonly(Pubkey::from_str(RAYDIUM_V4_AUTHORITY)?, false),
+        AccountMeta::new(raydium_accounts.amm_open_orders, false),
+        AccountMeta::new(raydium_accounts.amm_target_orders, false),
+        AccountMeta::new(raydium_accounts.pool_coin_token_account, false),
+        AccountMeta::new(raydium_accounts.pool_pc_token_account, false),
+        AccountMeta::new_readonly(Pubkey::from_str(SERUM_PROGRAM)?, false),
+        AccountMeta::new(raydium_accounts.serum_market, false),
+        AccountMeta::new(serum_accounts.bids, false),
+        AccountMeta::new(serum_accounts.asks, false),
+        AccountMeta::new(serum_accounts.event_queue, false),
+        AccountMeta::new(serum_accounts.coin_vault_account, false),
+        AccountMeta::new(serum_accounts.pc_vault_account, false),
+        AccountMeta::new_readonly(serum_accounts.vault_signer, false),
+        AccountMeta::new(user_source_token_account, false),
+        AccountMeta::new(user_destination_token_account, false),
+        AccountMeta::new(owner, true),
+    ];
+
+    let data = SwapInstructionData {
+        instruction: RAYDIUM_V4_BUY_METHOD,
+        amount_in,
+        minimum_amount_out,
+    };
+
+    Ok(Instruction::new_with_borsh(
+        Pubkey::from_str(RAYDIUM_V4_PROGRAM)?,
+        &data,
+        accounts.to_vec(),
+    ))
 }

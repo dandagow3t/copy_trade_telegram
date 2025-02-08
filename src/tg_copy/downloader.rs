@@ -187,7 +187,9 @@ async fn listen_for_new_messages(
     let trader = Arc::new(MemeTrader::new());
     let trade_memory: Arc<Mutex<HashMap<String, TradeMemory>>> =
         Arc::new(Mutex::new(HashMap::new()));
-    const TRADE_TIMEOUT_SECS: u64 = 300;
+
+    // TODO change back to 300
+    const TRADE_TIMEOUT_SECS: u64 = 30;
 
     tracing::info!(
         "Strategy filtering is {}",
@@ -296,12 +298,13 @@ async fn listen_for_new_messages(
                                     //         slippage_bps,
                                     //     )
                                     //     .await
-                                    match trader.meta_buy(
-                                        open_trade.contract_address.as_str(),
-                                        position_size_sol,
-                                        slippage_bps,
-                                    )
-                                    .await
+                                    match trader
+                                        .meta_buy(
+                                            open_trade.contract_address.as_str(),
+                                            position_size_sol,
+                                            slippage_bps,
+                                        )
+                                        .await
                                     {
                                         Ok(tx_sig) => {
                                             let mut memory = trade_memory.lock().await;

@@ -2,6 +2,7 @@ use anyhow::{anyhow, Result};
 use chrono::Local;
 use env_logger::Builder;
 use log::LevelFilter;
+use rand::Rng;
 use serde::Deserialize;
 use solana_account_decoder::parse_account_data::ParsedAccount;
 use solana_account_decoder::UiAccountData;
@@ -186,4 +187,17 @@ where
     })
     .await
     .map_err(|e| anyhow!("{:#?}", e))
+}
+
+pub fn generate_random_seed() -> String {
+    // Generate 16 random bytes
+    let random_bytes: Vec<u8> = (0..16).map(|_| rand::thread_rng().gen::<u8>()).collect();
+
+    // Encode to base58
+    bs58::encode(random_bytes).into_string()
+}
+
+pub fn apply_slippage(amount: u64, slippage_bps: u16) -> u64 {
+    let slippage = amount * slippage_bps as u64 / 10_000;
+    amount - slippage
 }
