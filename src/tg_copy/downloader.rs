@@ -100,6 +100,7 @@ pub async fn async_main() -> Result<()> {
         trading_config.slippage_bps,
         telegram_config.pool_frequency,
         trading_config.trade_on,
+        trading_config.strategy_filter_on,
     )
     .await?;
 
@@ -181,11 +182,17 @@ async fn listen_for_new_messages(
     slippage_bps: u16,
     pool_frequency: u64,
     execute: bool,
+    strategy_filter_on: bool,
 ) -> Result<()> {
     let trader = Arc::new(MemeTrader::new());
     let trade_memory: Arc<Mutex<HashMap<String, TradeMemory>>> =
         Arc::new(Mutex::new(HashMap::new()));
     const TRADE_TIMEOUT_SECS: u64 = 300;
+
+    tracing::info!(
+        "Strategy filtering is {}",
+        if strategy_filter_on { "ON" } else { "OFF" }
+    );
 
     let mut interval = time::interval(Duration::from_secs(pool_frequency));
     let mut counter = 0;
@@ -272,11 +279,16 @@ async fn listen_for_new_messages(
                                     }
                                 };
 
-                                if should_execute
-                                    && filter_strategies_clone
+                                // Modified strategy check to respect STRATEGY_FILTER_ON
+                                let strategy_check = if strategy_filter_on {
+                                    filter_strategies_clone
                                         .iter()
                                         .any(|s| s == &open_trade.strategy)
-                                {
+                                } else {
+                                    true
+                                };
+
+                                if should_execute && strategy_check {
                                     match trader
                                         .buy_pump_fun(
                                             open_trade.contract_address.as_str(),
@@ -315,10 +327,17 @@ async fn listen_for_new_messages(
                                     close_trade.strategy,
                                     close_trade.contract_address
                                 );
-                                if filter_strategies_clone
-                                    .iter()
-                                    .any(|s| s == &close_trade.strategy)
-                                {
+
+                                // Modified strategy check for close trades
+                                let strategy_check = if strategy_filter_on {
+                                    filter_strategies_clone
+                                        .iter()
+                                        .any(|s| s == &close_trade.strategy)
+                                } else {
+                                    true
+                                };
+
+                                if strategy_check {
                                     // get account holdings for contract address
                                     let owner = Pubkey::from_str(
                                         "9AFb3BJTybJVvjWejqxstz9DUwYQxPepT94VCBi4escf",

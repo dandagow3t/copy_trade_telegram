@@ -7,6 +7,7 @@ pub mod dexscreener;
 pub mod jup;
 pub mod price;
 pub mod pump;
+pub mod raydium;
 pub mod scan;
 pub mod tools;
 pub mod trade;

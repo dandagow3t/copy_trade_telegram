@@ -56,7 +56,7 @@ impl MemeTrader {
             .pairs
             .first()
             .ok_or_else(|| anyhow!("No trading pairs found"))?;
-
+        tracing::info!("Dexscreener pair: {:?}", pair);
         Ok(MemeTokenInfo {
             name: pair.base_token.name.clone(),
             symbol: pair.base_token.symbol.clone(),
