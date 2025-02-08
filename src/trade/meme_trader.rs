@@ -1,27 +1,23 @@
 use anyhow::{anyhow, Result};
+use serde::Serialize;
 use solana_sdk::{native_token::sol_to_lamports, pubkey::Pubkey};
 use std::str::FromStr;
 use tracing::{info, warn};
 
 use crate::solana::{
-    dexscreener::search_ticker,
-    pump::fetch_metadata,
+    dexscreener::{search_ticker, DexScreenerResponse},
+    pump::{fetch_metadata, get_bonding_curve, mint_to_pump_accounts, PumpTokenInfo},
     trade_pump::{create_buy_pump_fun_ix, create_sell_pump_fun_ix},
+    trade_raydium::create_raydium_swap_ix,
     util::{execute_solana_transaction_with_priority, make_rpc_client},
 };
 
 pub struct MemeTrader {}
 
-#[derive(Debug)]
-pub struct MemeTokenInfo {
-    pub name: String,
-    pub symbol: String,
-    pub price: f64,
-    pub market_cap: f64,
-    pub volume_24h: f64,
-    pub is_pump_fun: bool,
-    pub dex: String,
-    pub raydium_pool: Option<String>,
+#[derive(Debug, Serialize)]
+pub enum TokenInfo {
+    Pump(PumpTokenInfo),
+    Dexscreener(DexScreenerResponse),
 }
 
 impl MemeTrader {
@@ -29,48 +25,80 @@ impl MemeTrader {
         Self {}
     }
 
-    /// Get information about a meme token from either Pump.fun or Dexscreener
-    pub async fn get_token_info(&self, token_address: &str) -> Result<MemeTokenInfo> {
-        // Try Pump.fun first
-        match Pubkey::from_str(token_address) {
-            Ok(mint) => {
-                if let Ok(metadata) = fetch_metadata(&mint).await {
-                    return Ok(MemeTokenInfo {
-                        name: metadata.name,
-                        symbol: metadata.symbol,
-                        price: metadata.usd_market_cap / metadata.total_supply as f64,
-                        market_cap: metadata.usd_market_cap,
-                        volume_24h: 0.0, // Pump.fun doesn't provide 24h volume
-                        is_pump_fun: true,
-                        dex: "pump.fun".to_string(),
-                        raydium_pool: None,
-                    });
+    /// Meta buy function is all ecompasing buy function.
+    /// 1. It first checks token metadata on Pump.fun API.
+    ///  1.1 If the metadata are found and the bonding curve is not complete it will buy on Pump.fun.
+    ///  1.2 If the metadata are found and the bonding curve is complete it will buy from Raydium.
+    /// 2. If the metadata are not found on Pump.fun it will check on Dexscreener.
+    /// 3. If the metadata is not found neither on Pump.fun nor on Dexscreener it will fallback to Pump.fun.
+    pub async fn meta_buy(
+        &self,
+        token_address: &str,
+        sol_amount: f64,
+        slippage_bps: u16,
+    ) -> Result<String> {
+        let token_info = self.get_token_info(token_address).await;
+        match token_info {
+            Ok(TokenInfo::Pump(pump_info)) => {
+                tracing::info!("Token is on Pump.fun {:#?}", pump_info);
+                match self
+                    .buy_pump_fun(token_address, sol_amount, slippage_bps)
+                    .await
+                {
+                    Ok(tx_sig) => Ok(tx_sig),
+                    Err(e) => {
+                        tracing::error!("Error buying on Pump.fun: {:#?}", e);
+                        match self
+                            .buy_raydium(pump_info.raydium_pool.as_str(), sol_amount, slippage_bps)
+                            .await
+                        {
+                            Ok(tx_sig) => Ok(tx_sig),
+                            Err(e) => {
+                                tracing::error!("Error buying from Raydium: {:#?}", e);
+                                Err(e)
+                            }
+                        }
+                    }
                 }
             }
-            Err(_) => warn!("Invalid Solana address format"),
+            Ok(TokenInfo::Dexscreener(dex_info)) => {
+                tracing::info!("Token is on Dexscreener {:#?}", dex_info);
+                // self.buy_dexscreener(token_address, sol_amount, slippage_bps)
+                //     .await
+                Ok(String::new())
+            }
+            _ => {
+                tracing::info!(
+                    "Token info not found on Pump.fun or Dexscreener. Fallback to Pump.fun"
+                );
+                self.buy_pump_fun(token_address, sol_amount, slippage_bps)
+                    .await
+            }
         }
+    }
 
-        // Fallback to Dexscreener
-        let dex_info = search_ticker(token_address.to_string()).await?;
-        let pair = dex_info
-            .pairs
-            .first()
-            .ok_or_else(|| anyhow!("No trading pairs found"))?;
-        tracing::info!("Dexscreener pair: {:?}", pair);
-        Ok(MemeTokenInfo {
-            name: pair.base_token.name.clone(),
-            symbol: pair.base_token.symbol.clone(),
-            price: pair.price_usd.parse::<f64>().unwrap_or(0.0),
-            market_cap: pair.liquidity.usd,
-            volume_24h: pair.volume.h24,
-            is_pump_fun: false,
-            dex: pair.dex_id.clone(),
-            raydium_pool: if pair.dex_id == "raydium" {
-                Some(pair.pair_address.clone())
-            } else {
-                None
-            },
-        })
+    /// Get information about a meme token from either Pump.fun or Dexscreener
+    pub async fn get_token_info(&self, token_address: &str) -> Result<TokenInfo> {
+        // Try Pump.fun first
+        let pump_result = match Pubkey::from_str(token_address) {
+            Ok(mint) => fetch_metadata(&mint).await,
+            Err(_) => Err(anyhow!("Invalid Solana address format")),
+        };
+
+        // If Pump.fun fails, try Dexscreener
+        if pump_result.is_err() {
+            let dex_info = search_ticker(token_address.to_string()).await?;
+            tracing::info!("Dexscreener info: {:#?}", dex_info);
+
+            let pair = dex_info
+                .pairs
+                .first()
+                .ok_or_else(|| anyhow!("No trading pairs found"))?;
+
+            Ok(TokenInfo::Dexscreener(dex_info))
+        } else {
+            Ok(TokenInfo::Pump(pump_result.unwrap()))
+        }
     }
 
     /// Buy a token on Pump.fun
@@ -80,20 +108,10 @@ impl MemeTrader {
         sol_amount: f64,
         slippage_bps: u16,
     ) -> Result<String> {
-        info!("Buying {} SOL worth of token {}", sol_amount, token_address);
-
-        // Verify it's a Pump.fun token first
-        // let mint = Pubkey::from_str(token_address)?;
-        // let pump_accounts = mint_to_pump_accounts(&mint);
-
-        // Get bonding curve to verify token exists
-        // let bonding_curve =
-        //     get_bonding_curve(&self.rpc_client, pump_accounts.bonding_curve).await?;
-
-        // if bonding_curve.complete {
-        //     return Err(anyhow!("Token is already completed/rugged"));
-        // }
-
+        info!(
+            "Pump.fun: try buying {} SOL worth of token {}",
+            sol_amount, token_address
+        );
         let token_address = token_address.to_string();
 
         execute_solana_transaction_with_priority(move |owner| async move {
@@ -101,6 +119,31 @@ impl MemeTrader {
                 token_address.to_string(),
                 sol_to_lamports(sol_amount),
                 slippage_bps,
+                &make_rpc_client(),
+                &owner,
+            )
+            .await
+        })
+        .await
+    }
+
+    pub async fn buy_raydium(
+        &self,
+        raydium_pool: &str,
+        sol_amount: f64,
+        slippage_bps: u16,
+    ) -> Result<String> {
+        info!(
+            "Raydium: try buying {} SOL worth of token {} on Raydium pool {}",
+            sol_amount, "?", raydium_pool
+        );
+        let raydium_pool = raydium_pool.to_string();
+        execute_solana_transaction_with_priority(move |owner| async move {
+            create_raydium_swap_ix(
+                raydium_pool.to_string(),
+                sol_to_lamports(sol_amount),
+                slippage_bps,
+                0,
                 &make_rpc_client(),
                 &owner,
             )

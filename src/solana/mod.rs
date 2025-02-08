@@ -12,6 +12,7 @@ pub mod scan;
 pub mod tools;
 pub mod trade;
 pub mod trade_pump;
+pub mod trade_raydium;
 pub mod transaction;
 pub mod transfer;
 pub mod util;

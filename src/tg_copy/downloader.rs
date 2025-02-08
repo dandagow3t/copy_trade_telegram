@@ -289,13 +289,19 @@ async fn listen_for_new_messages(
                                 };
 
                                 if should_execute && strategy_check {
-                                    match trader
-                                        .buy_pump_fun(
-                                            open_trade.contract_address.as_str(),
-                                            position_size_sol,
-                                            slippage_bps,
-                                        )
-                                        .await
+                                    // match trader
+                                    //     .buy_pump_fun(
+                                    //         open_trade.contract_address.as_str(),
+                                    //         position_size_sol,
+                                    //         slippage_bps,
+                                    //     )
+                                    //     .await
+                                    match trader.meta_buy(
+                                        open_trade.contract_address.as_str(),
+                                        position_size_sol,
+                                        slippage_bps,
+                                    )
+                                    .await
                                     {
                                         Ok(tx_sig) => {
                                             let mut memory = trade_memory.lock().await;

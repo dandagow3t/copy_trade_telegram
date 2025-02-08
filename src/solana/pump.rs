@@ -116,6 +116,7 @@ pub fn mint_to_pump_accounts(mint: &Pubkey) -> PumpAccounts {
         metadata: Pubkey::default(),
     }
 }
+
 pub async fn get_bonding_curve(
     rpc_client: &RpcClient,
     bonding_curve_pubkey: Pubkey,
@@ -160,6 +161,14 @@ pub async fn get_bonding_curve(
                     };
 
                     debug!("Parsed BondingCurveLayout: {:?}", layout);
+                    tracing::info!(
+                        "Bonding curve [complete {}, SOL/TKN re. [{}/{}], SOL/TKN vir. [{}/{}]]",
+                        layout.complete,
+                        layout.real_sol_reserves,
+                        layout.virtual_sol_reserves,
+                        layout.real_token_reserves,
+                        layout.virtual_token_reserves
+                    );
                     return Ok(layout);
                 } else {
                     if retries >= MAX_RETRIES {
