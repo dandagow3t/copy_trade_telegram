@@ -5,7 +5,9 @@ use listen_kit::signer::{solana::LocalSolanaSigner, SignerContext};
 use listen_kit::solana::util::env;
 use std::{io, sync::Arc};
 use tracing_appender::rolling::{RollingFileAppender, Rotation};
-use tracing_subscriber::{filter::LevelFilter, fmt, prelude::*, EnvFilter};
+use tracing_subscriber::{
+    filter::LevelFilter, fmt, prelude::*, util::SubscriberInitExt, EnvFilter,
+};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -18,11 +20,11 @@ async fn main() -> Result<()> {
         .with_default_directive(LevelFilter::INFO.into())
         .parse_lossy("copy_trade_telegram=info,grammers_session=warn");
 
-    let _ = tracing_subscriber::registry()
+    tracing_subscriber::registry()
         .with(fmt::Layer::new().with_writer(io::stdout))
         .with(fmt::Layer::new().with_writer(non_blocking))
         .with(filter)
-        .try_init();
+        .init();
 
     let signer = LocalSolanaSigner::new(env("SOLANA_PRIVATE_KEY"));
     SignerContext::with_signer(Arc::new(signer), async { async_main().await }).await?;
