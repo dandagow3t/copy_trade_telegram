@@ -107,7 +107,7 @@ impl MemeTrader {
                         {
                             Ok(tx_sig) => Ok(tx_sig),
                             Err(e) => {
-                                tracing::error!("Error buying from Raydium: {:#?}", e);
+                                tracing::error!("Error selling on Raydium: {:#?}", e);
                                 Err(e)
                             }
                         }
