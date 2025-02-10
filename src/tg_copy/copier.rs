@@ -36,6 +36,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::sync::Mutex;
 use tokio::time;
 
+use super::parse_trade::{CloseTrade, OpenTrade};
+
 const SESSION_FILE: &str = "downloader.session";
 
 #[derive(Debug)]
@@ -62,6 +64,10 @@ pub async fn async_main() -> Result<()> {
 
     // Setup indexes
     db::setup_indexes(&collection).await?;
+
+    // Initialize trade memory
+    let trade_memory: Arc<Mutex<HashMap<String, TradeMemory>>> =
+        Arc::new(Mutex::new(HashMap::new()));
 
     // Connect to Telegram
     tracing::info!("Connecting to Telegram...");
@@ -97,6 +103,7 @@ pub async fn async_main() -> Result<()> {
         &chat,
         &trading_config,
         &telegram_config,
+        trade_memory,
     )
     .await?;
 
@@ -175,13 +182,9 @@ async fn listen_for_new_messages(
     chat: &Chat,
     t_cfg: &TradingConfig,
     tg_cfg: &TelegramConfig,
+    trade_memory: Arc<Mutex<HashMap<String, TradeMemory>>>,
 ) -> Result<()> {
     let trader = Arc::new(MemeTrader::new());
-    let trade_memory: Arc<Mutex<HashMap<String, TradeMemory>>> =
-        Arc::new(Mutex::new(HashMap::new()));
-
-    // TODO change back to 300
-    const TRADE_TIMEOUT_SECS: u64 = 30;
 
     tracing::info!(
         "Strategy filtering is {}",
@@ -223,9 +226,6 @@ async fn listen_for_new_messages(
                 let trader = Arc::clone(&trader);
                 let trade_memory = Arc::clone(&trade_memory);
 
-                // Get current signer before spawning tasks
-                let signer = SignerContext::current().await;
-
                 // Spawn DB storage task
                 let db_task = tokio::spawn(async move {
                     db::store_trade_db(
@@ -239,148 +239,187 @@ async fn listen_for_new_messages(
                 });
 
                 if t_cfg.trade_on {
-                    let position_size_sol = t_cfg.position_size_sol;
-                    let slippage_bps = t_cfg.slippage_bps;
-                    let tip_lamports = t_cfg.tip_lamports;
-                    let strategy_filter_on = t_cfg.strategy_filter_on;
-                    let filter_strategies = t_cfg.filter_strategies.clone();
-
+                    let trade_clone = trade.clone();
+                    let trader = Arc::clone(&trader);
+                    let trade_memory = Arc::clone(&trade_memory);
+                    let t_cfg = t_cfg.clone();
+                    let signer = SignerContext::current().await;
                     let trade_task = tokio::spawn(SignerContext::with_signer(signer, async move {
-                        match &trade {
-                            Trade::Open(open_trade) => {
-                                tracing::info!(
-                                    "Buy signal received: {}, {}, {}",
-                                    open_trade.token,
-                                    open_trade.strategy,
-                                    open_trade.contract_address
-                                );
-
-                                let should_execute = {
-                                    let memory = trade_memory.lock().await;
-                                    let current_time = SystemTime::now()
-                                        .duration_since(UNIX_EPOCH)
-                                        .unwrap()
-                                        .as_secs();
-
-                                    if let Some(last_trade) =
-                                        memory.get(&open_trade.contract_address)
-                                    {
-                                        if current_time - last_trade.last_trade_time
-                                            > TRADE_TIMEOUT_SECS
-                                        {
-                                            true
-                                        } else {
-                                            tracing::info!(
-                                                "Skipping duplicate trade for {} (previous strategy: {})",
-                                                open_trade.token,
-                                                last_trade.strategy
-                                            );
-                                            false
-                                        }
-                                    } else {
-                                        true
-                                    }
-                                };
-
-                                // Modified strategy check to respect STRATEGY_FILTER_ON
-                                let strategy_check = if strategy_filter_on {
-                                    filter_strategies.iter().any(|s| s == &open_trade.strategy)
-                                } else {
-                                    true
-                                };
-
-                                if should_execute && strategy_check {
-                                    match trader
-                                        .meta_buy(
-                                            open_trade.contract_address.as_str(),
-                                            position_size_sol,
-                                            slippage_bps,
-                                            tip_lamports,
-                                        )
-                                        .await
-                                    {
-                                        Ok(tx_sig) => {
-                                            let mut memory = trade_memory.lock().await;
-                                            memory.insert(
-                                                open_trade.contract_address.clone(),
-                                                TradeMemory {
-                                                    last_trade_time: SystemTime::now()
-                                                        .duration_since(UNIX_EPOCH)
-                                                        .unwrap()
-                                                        .as_secs(),
-                                                    strategy: open_trade.strategy.clone(),
-                                                },
-                                            );
-                                            tracing::info!(
-                                                "Buy tx: https://solscan.io/tx/{}",
-                                                tx_sig
-                                            );
-                                        }
-                                        Err(e) => {
-                                            tracing::error!("Buy transaction failed: {:?}", e);
-                                        }
-                                    }
-                                }
-                            }
-                            Trade::Close(close_trade) => {
-                                tracing::info!(
-                                    "Sell, {}, {}, {}",
-                                    close_trade.token,
-                                    close_trade.strategy,
-                                    close_trade.contract_address
-                                );
-
-                                // Modified strategy check for close trades
-                                let strategy_check = if strategy_filter_on {
-                                    filter_strategies.iter().any(|s| s == &close_trade.strategy)
-                                } else {
-                                    true
-                                };
-
-                                if strategy_check {
-                                    // get account holdings for contract address
-                                    let signer = SignerContext::current().await;
-                                    let owner = Pubkey::from_str(signer.pubkey().as_str()).unwrap();
-                                    let holdings = get_balance(
-                                        &RpcClient::new(env("SOLANA_RPC_URL")),
-                                        &owner,
-                                        &Pubkey::from_str(close_trade.contract_address.as_str())?,
-                                    )
-                                    .await
-                                    .unwrap();
-                                    tracing::info!("holdings: {:?}", holdings);
-                                    match trader
-                                        .meta_sell(
-                                            close_trade.contract_address.as_str(),
-                                            holdings.parse::<u64>()?,
-                                            tip_lamports,
-                                        )
-                                        .await
-                                    {
-                                        Ok(tx_sig) => {
-                                            tracing::info!(
-                                                "Sell tx: https://solscan.io/tx/{}",
-                                                tx_sig
-                                            );
-                                        }
-                                        Err(e) => {
-                                            tracing::error!("Sell transaction failed: {:?}", e);
-                                        }
-                                    }
-                                }
-                                let mut memory = trade_memory.lock().await;
-                                memory.remove(&close_trade.contract_address);
-                            }
+                        if let Err(e) =
+                            handle_trade(trade_clone, trade_memory, trader, &t_cfg).await
+                        {
+                            tracing::error!("Error handling trade: {:?}", e);
                         }
                         Ok(())
                     }));
 
-                    // join both tasks
                     let _ = tokio::join!(db_task, trade_task);
                 }
             }
         }
     }
+}
+
+async fn handle_trade(
+    trade: Trade,
+    trade_memory: Arc<Mutex<HashMap<String, TradeMemory>>>,
+    trader: Arc<MemeTrader>,
+    t_cfg: &TradingConfig,
+) -> Result<()> {
+    match trade {
+        Trade::Open(open_trade) => handle_open_trade(open_trade, trade_memory, trader, t_cfg).await,
+        Trade::Close(close_trade) => {
+            handle_close_trade(close_trade, trade_memory, trader, t_cfg).await
+        }
+    }
+}
+
+async fn handle_open_trade(
+    open_trade: OpenTrade,
+    trade_memory: Arc<Mutex<HashMap<String, TradeMemory>>>,
+    trader: Arc<MemeTrader>,
+    t_cfg: &TradingConfig,
+) -> Result<()> {
+    tracing::info!(
+        "Buy signal received: {}, {}, {}",
+        open_trade.token,
+        open_trade.strategy,
+        open_trade.contract_address
+    );
+
+    if !should_execute_trade(&open_trade, &trade_memory).await {
+        return Ok(());
+    }
+
+    if !passes_strategy_filter(&open_trade.strategy, t_cfg) {
+        return Ok(());
+    }
+
+    match trader
+        .meta_buy(
+            open_trade.contract_address.as_str(),
+            t_cfg.position_size_sol,
+            t_cfg.slippage_bps,
+            t_cfg.tip_lamports,
+        )
+        .await
+    {
+        Ok(tx_sig) => {
+            update_trade_memory(&open_trade, &trade_memory).await;
+            tracing::info!("Buy tx: https://solscan.io/tx/{}", tx_sig);
+        }
+        Err(e) => {
+            tracing::error!("Buy transaction failed: {:?}", e);
+        }
+    }
+
+    Ok(())
+}
+
+async fn handle_close_trade(
+    close_trade: CloseTrade,
+    trade_memory: Arc<Mutex<HashMap<String, TradeMemory>>>,
+    trader: Arc<MemeTrader>,
+    t_cfg: &TradingConfig,
+) -> Result<()> {
+    tracing::info!(
+        "Sell signal received: {}, {}, {}",
+        close_trade.token,
+        close_trade.strategy,
+        close_trade.contract_address
+    );
+
+    if !passes_strategy_filter(&close_trade.strategy, t_cfg) {
+        return Ok(());
+    }
+
+    let holdings = get_token_holdings(&close_trade.contract_address).await?;
+    tracing::info!("holdings: {:?}", holdings);
+
+    match trader
+        .meta_sell(
+            close_trade.contract_address.as_str(),
+            holdings.parse::<u64>()?,
+            t_cfg.tip_lamports,
+        )
+        .await
+    {
+        Ok(tx_sig) => {
+            tracing::info!("Sell tx: https://solscan.io/tx/{}", tx_sig);
+        }
+        Err(e) => {
+            tracing::error!("Sell transaction failed: {:?}", e);
+        }
+    }
+
+    let mut memory = trade_memory.lock().await;
+    memory.remove(&close_trade.contract_address);
+
+    Ok(())
+}
+
+const TRADE_TIMEOUT_SECS: u64 = 30;
+
+async fn should_execute_trade(
+    open_trade: &OpenTrade,
+    trade_memory: &Arc<Mutex<HashMap<String, TradeMemory>>>,
+) -> bool {
+    let memory = trade_memory.lock().await;
+    let current_time = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+
+    if let Some(last_trade) = memory.get(&open_trade.contract_address) {
+        if current_time - last_trade.last_trade_time > TRADE_TIMEOUT_SECS {
+            true
+        } else {
+            tracing::info!(
+                "Skipping duplicate trade for {} (previous strategy: {})",
+                open_trade.token,
+                last_trade.strategy
+            );
+            false
+        }
+    } else {
+        true
+    }
+}
+
+fn passes_strategy_filter(strategy: &str, t_cfg: &TradingConfig) -> bool {
+    if !t_cfg.strategy_filter_on {
+        return true;
+    }
+    t_cfg.filter_strategies.iter().any(|s| s == strategy)
+}
+
+async fn update_trade_memory(
+    open_trade: &OpenTrade,
+    trade_memory: &Arc<Mutex<HashMap<String, TradeMemory>>>,
+) {
+    let mut memory = trade_memory.lock().await;
+    memory.insert(
+        open_trade.contract_address.clone(),
+        TradeMemory {
+            last_trade_time: SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_secs(),
+            strategy: open_trade.strategy.clone(),
+        },
+    );
+}
+
+async fn get_token_holdings(contract_address: &str) -> Result<String> {
+    let signer = SignerContext::current().await;
+    let owner = Pubkey::from_str(signer.pubkey().as_str()).unwrap();
+    get_balance(
+        &RpcClient::new(env("SOLANA_RPC_URL")),
+        &owner,
+        &Pubkey::from_str(contract_address)?,
+    )
+    .await
+    .map_err(|e| e.into())
 }
 
 fn prompt(message: &str) -> Result<String> {

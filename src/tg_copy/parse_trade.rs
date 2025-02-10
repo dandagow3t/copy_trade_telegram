@@ -1,3 +1,4 @@
+use rig::pipeline::Op;
 use serde::{Deserialize, Serialize};
 use std::str::FromStr;
 
@@ -35,7 +36,7 @@ impl ToString for OperationType {
 }
 
 #[derive(Debug, Clone)]
-pub struct TradeClose {
+pub struct CloseTrade {
     pub strategy: String,
     pub op_type: OperationType,
     pub token: String,
@@ -46,7 +47,7 @@ pub struct TradeClose {
 }
 
 #[derive(Debug, Clone)]
-pub struct TradeOpen {
+pub struct OpenTrade {
     pub strategy: String,
     pub token: String,
     pub buy_price: f64,
@@ -59,8 +60,8 @@ pub struct TradeOpen {
 
 #[derive(Debug, Clone)]
 pub enum Trade {
-    Open(TradeOpen),
-    Close(TradeClose),
+    Open(OpenTrade),
+    Close(CloseTrade),
 }
 
 fn extract_contract_address(text: &str) -> Option<String> {
@@ -107,7 +108,7 @@ pub fn parse_trade(message: &str) -> Option<Trade> {
         .or_else(|| parse_trade_open(message).map(Trade::Open))
 }
 
-pub fn parse_trade_close(message: &str) -> Option<TradeClose> {
+pub fn parse_trade_close(message: &str) -> Option<CloseTrade> {
     let lines: Vec<&str> = message.lines().collect();
 
     // First line should contain token name and operation type
@@ -160,7 +161,7 @@ pub fn parse_trade_close(message: &str) -> Option<TradeClose> {
     let profit_pct = profit_str.parse::<f64>().ok().unwrap_or(0f64);
 
     let contract_address = extract_contract_address(message)?;
-    Some(TradeClose {
+    Some(CloseTrade {
         strategy,
         op_type,
         token,
@@ -188,7 +189,7 @@ fn parse_market_cap(text: &str) -> Option<f64> {
     }
 }
 
-pub fn parse_trade_open(message: &str) -> Option<TradeOpen> {
+pub fn parse_trade_open(message: &str) -> Option<OpenTrade> {
     let lines: Vec<&str> = message.lines().collect();
 
     // Extract strategy from second line
@@ -238,7 +239,7 @@ pub fn parse_trade_open(message: &str) -> Option<TradeOpen> {
 
     let contract_address = extract_contract_address(message)?;
 
-    Some(TradeOpen {
+    Some(OpenTrade {
         strategy,
         token,
         buy_price,

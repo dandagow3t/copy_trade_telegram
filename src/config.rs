@@ -36,7 +36,7 @@ impl fmt::Display for TelegramConfig {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct TradingConfig {
     pub trade_on: bool,
     pub position_size_sol: f64,

@@ -10,7 +10,7 @@ use crate::solana::{
 };
 
 use listen_kit::solana::{
-    pump::{fetch_metadata, PumpTokenInfo},
+    pump::{self, fetch_metadata, PumpTokenInfo},
     trade_pump::{create_buy_pump_fun_ix, create_sell_pump_fun_ix},
     util::{execute_solana_transaction_with_tip, make_rpc_client},
 };
@@ -44,30 +44,35 @@ impl MemeTrader {
         let token_info = self.get_token_info(token_address).await;
         match token_info {
             Ok(TokenInfo::Pump(pump_info)) => {
-                tracing::info!("Token is on Pump.fun {:#?}", pump_info);
-                match self
-                    .buy_pump_fun(token_address, sol_amount, slippage_bps, tip_lamports)
+                match pump_info.complete {
+                    true => tracing::info!(
+                        "Pump.fun: complete, buying from Raydium; pool {}",
+                        pump_info.raydium_pool
+                    ),
+                    false => tracing::info!(
+                        "Pump.fun: incomplete, bonding curve {}",
+                        pump_info.bonding_curve
+                    ),
+                }
+
+                let result = if !pump_info.complete {
+                    self.buy_pump_fun(token_address, sol_amount, slippage_bps, tip_lamports)
+                        .await
+                } else {
+                    self.buy_raydium(
+                        token_address,
+                        pump_info.raydium_pool.as_str(),
+                        sol_amount,
+                        slippage_bps,
+                        tip_lamports,
+                    )
                     .await
-                {
+                };
+                match result {
                     Ok(tx_sig) => Ok(tx_sig),
                     Err(e) => {
-                        tracing::error!("Error buying on Pump.fun: {:#?}", e);
-                        match self
-                            .buy_raydium(
-                                token_address,
-                                pump_info.raydium_pool.as_str(),
-                                sol_amount,
-                                slippage_bps,
-                                tip_lamports,
-                            )
-                            .await
-                        {
-                            Ok(tx_sig) => Ok(tx_sig),
-                            Err(e) => {
-                                tracing::error!("Error buying from Raydium: {:#?}", e);
-                                Err(e)
-                            }
-                        }
+                        tracing::error!("Error buying on Pump.fun or Raydium: {:#?}", e);
+                        Err(e)
                     }
                 }
             }
@@ -102,32 +107,39 @@ impl MemeTrader {
         let token_info = self.get_token_info(token_address).await;
         match token_info {
             Ok(TokenInfo::Pump(pump_info)) => {
-                tracing::info!("Token is on Pump.fun {:#?}", pump_info);
-                match self
-                    .sell_pump_fun(token_address, token_amount, tip_lamports)
+                match pump_info.complete {
+                    true => tracing::info!(
+                        "Pump.fun: complete, buying from Raydium; pool {}",
+                        pump_info.raydium_pool
+                    ),
+                    false => tracing::info!(
+                        "Pump.fun: incomplete, bonding curve {}",
+                        pump_info.bonding_curve
+                    ),
+                }
+
+                let result = if !pump_info.complete {
+                    self.sell_pump_fun(token_address, token_amount, tip_lamports)
+                        .await
+                } else {
+                    self.sell_raydium(
+                        token_address,
+                        pump_info.raydium_pool.as_str(),
+                        token_amount,
+                        tip_lamports,
+                    )
                     .await
-                {
+                };
+
+                match result {
                     Ok(tx_sig) => Ok(tx_sig),
                     Err(e) => {
-                        tracing::error!("Error selling on Pump.fun: {:#?}", e);
-                        match self
-                            .sell_raydium(
-                                token_address,
-                                pump_info.raydium_pool.as_str(),
-                                token_amount,
-                                tip_lamports,
-                            )
-                            .await
-                        {
-                            Ok(tx_sig) => Ok(tx_sig),
-                            Err(e) => {
-                                tracing::error!("Error selling on Raydium: {:#?}", e);
-                                Err(e)
-                            }
-                        }
+                        tracing::error!("Error selling on Pump.fun or Raydium: {:#?}", e);
+                        Err(e)
                     }
                 }
             }
+
             Ok(TokenInfo::Dexscreener(dex_info)) => {
                 tracing::info!("Token is on Dexscreener {:#?}", dex_info);
                 // self.buy_dexscreener(token_address, sol_amount, slippage_bps)
@@ -226,8 +238,8 @@ impl MemeTrader {
         tip_lamports: u64,
     ) -> Result<String> {
         info!(
-            "Raydium: try buying {} SOL worth of token {} on Raydium pool {}",
-            sol_amount, token_address, raydium_pool
+            "Raydium: try buying {} SOL worth of token {}",
+            sol_amount, token_address
         );
         let raydium_pool = raydium_pool.to_string();
         let token_address = token_address.to_string();

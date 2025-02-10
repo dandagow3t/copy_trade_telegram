@@ -18,11 +18,11 @@ async fn main() -> Result<()> {
         .with_default_directive(LevelFilter::INFO.into())
         .parse_lossy("copy_trade_telegram=info,grammers_session=warn");
 
-    tracing_subscriber::registry()
+    let _ = tracing_subscriber::registry()
         .with(fmt::Layer::new().with_writer(io::stdout))
         .with(fmt::Layer::new().with_writer(non_blocking))
         .with(filter)
-        .init();
+        .try_init();
 
     let signer = LocalSolanaSigner::new(env("SOLANA_PRIVATE_KEY"));
     SignerContext::with_signer(Arc::new(signer), async { async_main().await }).await?;
