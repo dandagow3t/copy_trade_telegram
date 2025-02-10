@@ -339,6 +339,7 @@ async fn listen_for_new_messages(
 
                                 if strategy_check {
                                     // get account holdings for contract address
+                                    let signer = SignerContext::current().await;
                                     let owner = Pubkey::from_str(signer.pubkey().as_str()).unwrap();
                                     let holdings = get_balance(
                                         &RpcClient::new(env("SOLANA_RPC_URL")),
