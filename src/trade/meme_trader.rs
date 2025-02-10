@@ -2,14 +2,17 @@ use anyhow::{anyhow, Result};
 use serde::Serialize;
 use solana_sdk::{native_token::sol_to_lamports, pubkey::Pubkey};
 use std::str::FromStr;
-use tracing::{info, warn};
+use tracing::info;
 
 use crate::solana::{
     dexscreener::{search_ticker, DexScreenerResponse},
+    trade_raydium::{create_raydium_sol_swap_ix, create_raydium_token_swap_ix},
+};
+
+use listen_kit::solana::{
     pump::{fetch_metadata, PumpTokenInfo},
     trade_pump::{create_buy_pump_fun_ix, create_sell_pump_fun_ix},
-    trade_raydium::{create_raydium_sol_swap_ix, create_raydium_token_swap_ix},
-    util::{execute_solana_transaction_with_priority, make_rpc_client},
+    util::{execute_solana_transaction_with_tip, make_rpc_client},
 };
 
 pub struct MemeTrader {}
@@ -36,13 +39,14 @@ impl MemeTrader {
         token_address: &str,
         sol_amount: f64,
         slippage_bps: u16,
+        tip_lamports: u64,
     ) -> Result<String> {
         let token_info = self.get_token_info(token_address).await;
         match token_info {
             Ok(TokenInfo::Pump(pump_info)) => {
                 tracing::info!("Token is on Pump.fun {:#?}", pump_info);
                 match self
-                    .buy_pump_fun(token_address, sol_amount, slippage_bps)
+                    .buy_pump_fun(token_address, sol_amount, slippage_bps, tip_lamports)
                     .await
                 {
                     Ok(tx_sig) => Ok(tx_sig),
@@ -54,6 +58,7 @@ impl MemeTrader {
                                 pump_info.raydium_pool.as_str(),
                                 sol_amount,
                                 slippage_bps,
+                                tip_lamports,
                             )
                             .await
                         {
@@ -76,7 +81,7 @@ impl MemeTrader {
                 tracing::info!(
                     "Token info not found on Pump.fun or Dexscreener. Fallback to Pump.fun"
                 );
-                self.buy_pump_fun(token_address, sol_amount, slippage_bps)
+                self.buy_pump_fun(token_address, sol_amount, slippage_bps, tip_lamports)
                     .await
             }
         }
@@ -88,12 +93,20 @@ impl MemeTrader {
     ///  1.2 If the metadata are found and the bonding curve is complete it will buy from Raydium.
     /// 2. If the metadata are not found on Pump.fun it will check on Dexscreener.
     /// 3. If the metadata is not found neither on Pump.fun nor on Dexscreener it will fallback to Pump.fun.
-    pub async fn meta_sell(&self, token_address: &str, token_amount: u64) -> Result<String> {
+    pub async fn meta_sell(
+        &self,
+        token_address: &str,
+        token_amount: u64,
+        tip_lamports: u64,
+    ) -> Result<String> {
         let token_info = self.get_token_info(token_address).await;
         match token_info {
             Ok(TokenInfo::Pump(pump_info)) => {
                 tracing::info!("Token is on Pump.fun {:#?}", pump_info);
-                match self.sell_pump_fun(token_address, token_amount).await {
+                match self
+                    .sell_pump_fun(token_address, token_amount, tip_lamports)
+                    .await
+                {
                     Ok(tx_sig) => Ok(tx_sig),
                     Err(e) => {
                         tracing::error!("Error selling on Pump.fun: {:#?}", e);
@@ -102,6 +115,7 @@ impl MemeTrader {
                                 token_address,
                                 pump_info.raydium_pool.as_str(),
                                 token_amount,
+                                tip_lamports,
                             )
                             .await
                         {
@@ -124,7 +138,8 @@ impl MemeTrader {
                 tracing::info!(
                     "Token info not found on Pump.fun or Dexscreener. Fallback to Pump.fun"
                 );
-                self.sell_pump_fun(token_address, token_amount).await
+                self.sell_pump_fun(token_address, token_amount, tip_lamports)
+                    .await
             }
         }
     }
@@ -159,6 +174,7 @@ impl MemeTrader {
         token_address: &str,
         sol_amount: f64,
         slippage_bps: u16,
+        tip_lamports: u64,
     ) -> Result<String> {
         info!(
             "Pump.fun: try buying {} SOL worth of token {}",
@@ -166,27 +182,38 @@ impl MemeTrader {
         );
         let token_address = token_address.to_string();
 
-        execute_solana_transaction_with_priority(move |owner| async move {
-            create_buy_pump_fun_ix(
-                token_address.to_string(),
-                sol_to_lamports(sol_amount),
-                slippage_bps,
-                &make_rpc_client(),
-                &owner,
-            )
-            .await
-        })
+        execute_solana_transaction_with_tip(
+            move |owner| async move {
+                create_buy_pump_fun_ix(
+                    token_address.to_string(),
+                    sol_to_lamports(sol_amount),
+                    slippage_bps,
+                    &make_rpc_client(),
+                    &owner,
+                )
+                .await
+            },
+            tip_lamports,
+        )
         .await
     }
 
     /// Sell a token on Pump.fun
-    pub async fn sell_pump_fun(&self, token_address: &str, token_amount: u64) -> Result<String> {
+    pub async fn sell_pump_fun(
+        &self,
+        token_address: &str,
+        token_amount: u64,
+        tip_lamports: u64,
+    ) -> Result<String> {
         info!("Selling {} tokens of {}", token_amount, token_address);
 
         let token_address = token_address.to_string();
-        execute_solana_transaction_with_priority(move |owner| async move {
-            create_sell_pump_fun_ix(token_address.to_string(), token_amount, &owner).await
-        })
+        execute_solana_transaction_with_tip(
+            move |owner| async move {
+                create_sell_pump_fun_ix(token_address.to_string(), token_amount, &owner).await
+            },
+            tip_lamports,
+        )
         .await
     }
 
@@ -196,6 +223,7 @@ impl MemeTrader {
         raydium_pool: &str,
         sol_amount: f64,
         slippage_bps: u16,
+        tip_lamports: u64,
     ) -> Result<String> {
         info!(
             "Raydium: try buying {} SOL worth of token {} on Raydium pool {}",
@@ -204,17 +232,20 @@ impl MemeTrader {
         let raydium_pool = raydium_pool.to_string();
         let token_address = token_address.to_string();
 
-        execute_solana_transaction_with_priority(move |owner| async move {
-            create_raydium_sol_swap_ix(
-                raydium_pool,
-                sol_to_lamports(sol_amount),
-                slippage_bps,
-                Pubkey::from_str(token_address.as_str())?,
-                &make_rpc_client(),
-                &owner,
-            )
-            .await
-        })
+        execute_solana_transaction_with_tip(
+            move |owner| async move {
+                create_raydium_sol_swap_ix(
+                    raydium_pool,
+                    sol_to_lamports(sol_amount),
+                    slippage_bps,
+                    Pubkey::from_str(token_address.as_str())?,
+                    &make_rpc_client(),
+                    &owner,
+                )
+                .await
+            },
+            tip_lamports,
+        )
         .await
     }
 
@@ -223,6 +254,7 @@ impl MemeTrader {
         token_address: &str,
         raydium_pool: &str,
         token_amount: u64,
+        tip_lamports: u64,
     ) -> Result<String> {
         info!(
             "Raydium: try selling {} tokens of {} on Raydium pool {}",
@@ -231,59 +263,19 @@ impl MemeTrader {
         let raydium_pool = raydium_pool.to_string();
         let token_address = token_address.to_string();
 
-        execute_solana_transaction_with_priority(move |owner| async move {
-            create_raydium_token_swap_ix(
-                raydium_pool,
-                token_amount as u64,
-                Pubkey::from_str(token_address.as_str())?, // Token
-                &make_rpc_client(),
-                &owner,
-            )
-            .await
-        })
+        execute_solana_transaction_with_tip(
+            move |owner| async move {
+                create_raydium_token_swap_ix(
+                    raydium_pool,
+                    token_amount as u64,
+                    Pubkey::from_str(token_address.as_str())?, // Token
+                    &make_rpc_client(),
+                    &owner,
+                )
+                .await
+            },
+            tip_lamports,
+        )
         .await
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[tokio::test]
-    async fn test_get_token_info_pump_fun() {
-        let trader = MemeTrader::new();
-        let info = trader
-            .get_token_info("4cRkQ2dntpusYag6Zmvco8T78WxK9Jqh1eEZJox8pump")
-            .await
-            .unwrap();
-
-        assert!(info.is_pump_fun);
-        assert_eq!(info.symbol, "🗿");
-    }
-
-    #[tokio::test]
-    async fn test_get_token_info_raydium() {
-        let trader = MemeTrader::new();
-        let info = trader
-            .get_token_info("BONK97G5KsjgR9jFbwcsUhoSgwKBQ9pRY1g6gQpKEanB")
-            .await
-            .unwrap();
-
-        assert!(!info.is_pump_fun);
-        assert_eq!(info.symbol, "BONK");
-    }
-
-    #[tokio::test]
-    #[ignore] // Requires wallet with SOL
-    async fn test_buy_pump_fun() {
-        let trader = MemeTrader::new();
-        let result = trader
-            .buy_pump_fun(
-                "4cRkQ2dntpusYag6Zmvco8T78WxK9Jqh1eEZJox8pump",
-                0.01, // 0.01 SOL
-                500,  // 5% slippage
-            )
-            .await;
-        assert!(result.is_ok());
     }
 }

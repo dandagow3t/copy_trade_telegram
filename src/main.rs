@@ -1,10 +1,8 @@
 use anyhow::Result;
-use copy_trade_telegram::{
-    signer::{solana::LocalSolanaSigner, SignerContext},
-    solana::util::env,
-    tg_copy::downloader::async_main,
-};
+use copy_trade_telegram::tg_copy::downloader::async_main;
 use dotenv::dotenv;
+use listen_kit::signer::{solana::LocalSolanaSigner, SignerContext};
+use listen_kit::solana::util::env;
 use std::{io, sync::Arc};
 use tracing_appender::rolling::{RollingFileAppender, Rotation};
 use tracing_subscriber::{filter::LevelFilter, fmt, prelude::*, EnvFilter};
