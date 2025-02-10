@@ -15,9 +15,6 @@
 //!
 
 use crate::config::{DbConfig, TelegramConfig, TradingConfig};
-use crate::signer::SignerContext;
-use crate::solana::balance::get_ata_balance;
-use crate::solana::util::env;
 use crate::tg_copy::db::{self, TradeDocument};
 use crate::tg_copy::parse_trade::{parse_trade, Trade};
 use crate::trade::meme_trader::MemeTrader;
@@ -25,6 +22,9 @@ use anyhow::Result;
 use grammers_client::types::Chat;
 use grammers_client::{Client, Config, SignInError};
 use grammers_session::Session;
+use listen_kit::signer::SignerContext;
+use listen_kit::solana::balance::get_balance;
+use listen_kit::solana::util::env;
 use mongodb::Collection;
 use solana_client::nonblocking::rpc_client::RpcClient;
 use solana_sdk::pubkey::Pubkey;
@@ -95,12 +95,8 @@ pub async fn async_main() -> Result<()> {
         &client,
         &collection,
         &chat,
-        trading_config.filter_strategies,
-        trading_config.position_size_sol,
-        trading_config.slippage_bps,
-        telegram_config.pool_frequency,
-        trading_config.trade_on,
-        trading_config.strategy_filter_on,
+        &trading_config,
+        &telegram_config,
     )
     .await?;
 
@@ -177,12 +173,8 @@ async fn listen_for_new_messages(
     client: &Client,
     collection: &Collection<TradeDocument>,
     chat: &Chat,
-    filter_strategies: Vec<String>,
-    position_size_sol: f64,
-    slippage_bps: u16,
-    pool_frequency: u64,
-    execute: bool,
-    strategy_filter_on: bool,
+    t_cfg: &TradingConfig,
+    tg_cfg: &TelegramConfig,
 ) -> Result<()> {
     let trader = Arc::new(MemeTrader::new());
     let trade_memory: Arc<Mutex<HashMap<String, TradeMemory>>> =
@@ -193,10 +185,14 @@ async fn listen_for_new_messages(
 
     tracing::info!(
         "Strategy filtering is {}",
-        if strategy_filter_on { "ON" } else { "OFF" }
+        if t_cfg.strategy_filter_on {
+            "ON"
+        } else {
+            "OFF"
+        }
     );
 
-    let mut interval = time::interval(Duration::from_secs(pool_frequency));
+    let mut interval = time::interval(Duration::from_secs(tg_cfg.pool_frequency));
     let mut counter = 0;
     tracing::info!("Listening for new messages...\n");
     loop {
@@ -242,8 +238,13 @@ async fn listen_for_new_messages(
                     .await
                 });
 
-                if execute {
-                    let filter_strategies_clone = filter_strategies.clone();
+                if t_cfg.trade_on {
+                    let position_size_sol = t_cfg.position_size_sol;
+                    let slippage_bps = t_cfg.slippage_bps;
+                    let tip_lamports = t_cfg.tip_lamports;
+                    let strategy_filter_on = t_cfg.strategy_filter_on;
+                    let filter_strategies = t_cfg.filter_strategies.clone();
+
                     let trade_task = tokio::spawn(SignerContext::with_signer(signer, async move {
                         match &trade {
                             Trade::Open(open_trade) => {
@@ -283,26 +284,18 @@ async fn listen_for_new_messages(
 
                                 // Modified strategy check to respect STRATEGY_FILTER_ON
                                 let strategy_check = if strategy_filter_on {
-                                    filter_strategies_clone
-                                        .iter()
-                                        .any(|s| s == &open_trade.strategy)
+                                    filter_strategies.iter().any(|s| s == &open_trade.strategy)
                                 } else {
                                     true
                                 };
 
                                 if should_execute && strategy_check {
-                                    // match trader
-                                    //     .buy_pump_fun(
-                                    //         open_trade.contract_address.as_str(),
-                                    //         position_size_sol,
-                                    //         slippage_bps,
-                                    //     )
-                                    //     .await
                                     match trader
                                         .meta_buy(
                                             open_trade.contract_address.as_str(),
                                             position_size_sol,
                                             slippage_bps,
+                                            tip_lamports,
                                         )
                                         .await
                                     {
@@ -339,20 +332,15 @@ async fn listen_for_new_messages(
 
                                 // Modified strategy check for close trades
                                 let strategy_check = if strategy_filter_on {
-                                    filter_strategies_clone
-                                        .iter()
-                                        .any(|s| s == &close_trade.strategy)
+                                    filter_strategies.iter().any(|s| s == &close_trade.strategy)
                                 } else {
                                     true
                                 };
 
                                 if strategy_check {
                                     // get account holdings for contract address
-                                    let owner = Pubkey::from_str(
-                                        "9AFb3BJTybJVvjWejqxstz9DUwYQxPepT94VCBi4escf",
-                                    )
-                                    .unwrap();
-                                    let holdings = get_ata_balance(
+                                    let owner = Pubkey::from_str(signer.pubkey().as_str()).unwrap();
+                                    let holdings = get_balance(
                                         &RpcClient::new(env("SOLANA_RPC_URL")),
                                         &owner,
                                         &Pubkey::from_str(close_trade.contract_address.as_str())?,
@@ -364,6 +352,7 @@ async fn listen_for_new_messages(
                                         .meta_sell(
                                             close_trade.contract_address.as_str(),
                                             holdings.parse::<u64>()?,
+                                            tip_lamports,
                                         )
                                         .await
                                     {

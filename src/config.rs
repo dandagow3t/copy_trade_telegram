@@ -41,18 +41,26 @@ pub struct TradingConfig {
     pub trade_on: bool,
     pub position_size_sol: f64,
     pub slippage_bps: u16,
+    pub tip_lamports: u64,
     pub filter_strategies: Vec<String>,
-    pub strategy_filter_on: bool, 
+    pub strategy_filter_on: bool,
 }
 
 impl fmt::Display for TradingConfig {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "\nTrading Config:\n  trade_on: {}\n  position_size_sol: {}\n  slippage_bps: {}\n  strategy_filter_on: {}\n  filter_strategies: {}",
-            self.trade_on, 
-            self.position_size_sol, 
+            "\nTrading Config:\n  \
+             trade_on: {}\n  \
+             position_size_sol: {}\n  \
+             slippage_bps: {}\n  \
+             tip_lamports: {}\n  \
+             strategy_filter_on: {}\n  \
+             filter_strategies: {}",
+            self.trade_on,
+            self.position_size_sol,
             self.slippage_bps,
+            self.tip_lamports,
             self.strategy_filter_on,
             self.filter_strategies.join(", ")
         )
@@ -93,6 +101,9 @@ impl TradingConfig {
                 .parse()?,
             slippage_bps: env::var("SLIPPAGE_BPS")
                 .expect("SLIPPAGE_BPS not set.")
+                .parse()?,
+            tip_lamports: env::var("TIP_LAMPORTS")
+                .expect("TIP_LAMPORTS not set.")
                 .parse()?,
             filter_strategies: env::var("FILTER_STRATEGIES")
                 .expect("FILTER_STRATEGIES not set.")
