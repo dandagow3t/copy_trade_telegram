@@ -1,5 +1,5 @@
 use anyhow::Result;
-use copy_trade_telegram::tg_copy::downloader::async_main;
+use copy_trade_telegram::tg_copy::copier::async_main;
 use dotenv::dotenv;
 use listen_kit::signer::{solana::LocalSolanaSigner, SignerContext};
 use listen_kit::solana::util::env;

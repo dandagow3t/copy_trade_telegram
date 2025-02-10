@@ -1,3 +1,3 @@
 pub mod db;
-pub mod downloader;
+pub mod copier;
 pub mod parse_trade;
