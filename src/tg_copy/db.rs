@@ -4,6 +4,7 @@ use mongodb::{bson::doc, options::IndexOptions, Collection, IndexModel};
 use serde::{Deserialize, Serialize};
 
 use crate::tg_copy::parse_trade::Trade;
+use crate::tg_copy::strategy::Strategy;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub enum TradeType {
@@ -111,3 +112,17 @@ pub async fn get_last_message_id(collection: &Collection<TradeDocument>) -> Resu
     let doc = collection.find_one(None, Some(options)).await?;
     Ok(doc.map(|d| d.message_id))
 }
+
+pub async fn load_strategies(collection: &Collection<Strategy>) -> Result<Vec<Strategy>> {
+    let mut cursor = collection.find(None, None).await?;
+    let mut strategies = Vec::new();
+    
+    while cursor.advance().await? {
+        let strategy = cursor.deserialize_current()?;
+        strategies.push(strategy);
+    }
+    
+    tracing::info!("Loaded {} strategies from database", strategies.len());
+    Ok(strategies)
+}
+

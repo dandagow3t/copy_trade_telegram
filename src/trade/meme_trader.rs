@@ -1,7 +1,7 @@
 use anyhow::{anyhow, Result};
 use serde::Serialize;
 use solana_sdk::{native_token::sol_to_lamports, pubkey::Pubkey};
-use std::str::FromStr;
+use std::{collections::HashMap, str::FromStr};
 use tracing::info;
 
 use crate::solana::{
@@ -10,12 +10,19 @@ use crate::solana::{
 };
 
 use listen_kit::solana::{
-    pump::{self, fetch_metadata, PumpTokenInfo},
+    pump::{fetch_metadata, PumpTokenInfo},
     trade_pump::{create_buy_pump_fun_ix, create_sell_pump_fun_ix},
     util::{execute_solana_transaction_with_tip, make_rpc_client},
 };
 
-pub struct MemeTrader {}
+pub struct ActiveTrade {
+    pub strategy: String, // Strategy name
+    pub tps: u8,          // Number of take profits
+    pub sls: u8,          // Number of stop losses
+}
+pub struct MemeTrader {
+    active_trades: HashMap<String, String>,
+}
 
 #[derive(Debug, Serialize)]
 pub enum TokenInfo {
@@ -25,7 +32,9 @@ pub enum TokenInfo {
 
 impl MemeTrader {
     pub fn new() -> Self {
-        Self {}
+        Self {
+            active_trades: HashMap::new(),
+        }
     }
 
     /// Meta buy function is all ecompasing buy function.
@@ -71,7 +80,10 @@ impl MemeTrader {
                 match result {
                     Ok(tx_sig) => Ok(tx_sig),
                     Err(e) => {
-                        tracing::error!("Error buying on Pump.fun or Raydium: {:#?}", e);
+                        match pump_info.complete {
+                            true => tracing::error!("Error buying on Raydium: {}", e),
+                            false => tracing::error!("Error buying on Pump.fun: {}", e),
+                        }
                         Err(e)
                     }
                 }
@@ -134,7 +146,10 @@ impl MemeTrader {
                 match result {
                     Ok(tx_sig) => Ok(tx_sig),
                     Err(e) => {
-                        tracing::error!("Error selling on Pump.fun or Raydium: {:#?}", e);
+                        match pump_info.complete {
+                            true => tracing::error!("Error selling on Raydium: {}", e),
+                            false => tracing::error!("Error selling on Pump.fun: {}", e),
+                        }
                         Err(e)
                     }
                 }

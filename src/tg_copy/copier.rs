@@ -17,6 +17,7 @@
 use crate::config::{DbConfig, TelegramConfig, TradingConfig};
 use crate::tg_copy::db::{self, TradeDocument};
 use crate::tg_copy::parse_trade::{parse_trade, Trade};
+use crate::tg_copy::strategy::Strategy;
 use crate::trade::meme_trader::MemeTrader;
 use anyhow::Result;
 use grammers_client::types::Chat;
@@ -61,7 +62,9 @@ pub async fn async_main() -> Result<()> {
     let client = mongodb::Client::with_uri_str(&db_config.mongodb_uri).await?;
     let db = client.database(&db_config.db_name);
     let collection = db.collection::<TradeDocument>("trades");
-
+    let strategies_collection = db.collection::<Strategy>("strategies");
+    let strategies = db::load_strategies(&strategies_collection).await?;
+    
     // Setup indexes
     db::setup_indexes(&collection).await?;
 
