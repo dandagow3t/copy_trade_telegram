@@ -1,7 +1,7 @@
 use bson::oid::ObjectId;
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Strategy {
     #[serde(rename = "_id")]
     pub id: ObjectId,
@@ -15,7 +15,7 @@ pub struct Strategy {
     pub sell_conditions: SellConditions,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct BuyCondition {
     #[serde(rename = "timeWindowSeconds")]
     pub time_window_seconds: i32,
@@ -34,15 +34,17 @@ pub struct BuyCondition {
     pub description: String,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct SellConditions {
     #[serde(rename = "takeProfitConditions")]
     pub take_profit_conditions: Option<Vec<TakeProfitCondition>>,
     #[serde(rename = "stopLossCondition")]
     pub stop_loss_condition: Option<StopLossCondition>,
+    #[serde(rename = "trailingStopLossCondition")]
+    pub trailing_stop_loss_condition: Option<TrailingStopLossCondition>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct TakeProfitCondition {
     #[serde(rename = "pnlPercentage")]
     pub pnl_percentage: i32,
@@ -51,9 +53,18 @@ pub struct TakeProfitCondition {
     pub description: String,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct StopLossCondition {
     #[serde(rename = "stopLossPercentage")]
     pub stop_loss_percentage: i32,
+    pub description: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct TrailingStopLossCondition {
+    #[serde(rename = "trailingStopLossPercentage")]
+    pub trailing_stop_loss_percentage: f32,
+    #[serde(rename = "isLogarithmic")]
+    pub is_logarithmic: bool,
     pub description: String,
 }

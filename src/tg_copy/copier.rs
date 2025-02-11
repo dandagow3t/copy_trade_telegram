@@ -15,6 +15,7 @@
 //!
 
 use crate::config::{DbConfig, TelegramConfig, TradingConfig};
+use crate::tg_copy::active_trade::{ActiveTrade, ActiveTradeManager};
 use crate::tg_copy::db::{self, TradeDocument};
 use crate::tg_copy::parse_trade::{parse_trade, Trade};
 use crate::tg_copy::strategy::Strategy;
@@ -64,7 +65,9 @@ pub async fn async_main() -> Result<()> {
     let collection = db.collection::<TradeDocument>("trades");
     let strategies_collection = db.collection::<Strategy>("strategies");
     let strategies = db::load_strategies(&strategies_collection).await?;
-    
+
+    tracing::info!("Strategies loaded: {:?}", strategies.len());
+
     // Setup indexes
     db::setup_indexes(&collection).await?;
 
@@ -100,6 +103,15 @@ pub async fn async_main() -> Result<()> {
 
     // Then start listening for new messages
 
+    let active_trades_collection = db.collection::<ActiveTrade>("active_trades");
+
+    // Setup indexes for active trades
+    let active_trade_manager = ActiveTradeManager::new(active_trades_collection.clone());
+    active_trade_manager.setup_indexes().await?;
+
+    // Update MemeTrader initialization
+    let trader = Arc::new(MemeTrader::new(active_trades_collection));
+
     listen_for_new_messages(
         &client,
         &collection,
@@ -107,6 +119,8 @@ pub async fn async_main() -> Result<()> {
         &trading_config,
         &telegram_config,
         trade_memory,
+        trader,
+        strategies,
     )
     .await?;
 
@@ -186,18 +200,9 @@ async fn listen_for_new_messages(
     t_cfg: &TradingConfig,
     tg_cfg: &TelegramConfig,
     trade_memory: Arc<Mutex<HashMap<String, TradeMemory>>>,
+    trader: Arc<MemeTrader>,
+    strategies: Vec<Strategy>,
 ) -> Result<()> {
-    let trader = Arc::new(MemeTrader::new());
-
-    tracing::info!(
-        "Strategy filtering is {}",
-        if t_cfg.strategy_filter_on {
-            "ON"
-        } else {
-            "OFF"
-        }
-    );
-
     let mut interval = time::interval(Duration::from_secs(tg_cfg.pool_frequency));
     let mut counter = 0;
     tracing::info!("Listening for new messages...\n");
@@ -247,9 +252,11 @@ async fn listen_for_new_messages(
                     let trade_memory = Arc::clone(&trade_memory);
                     let t_cfg = t_cfg.clone();
                     let signer = SignerContext::current().await;
+                    let strategies = strategies.clone();
                     let trade_task = tokio::spawn(SignerContext::with_signer(signer, async move {
                         if let Err(e) =
-                            handle_trade(trade_clone, trade_memory, trader, &t_cfg).await
+                            handle_trade(trade_clone, trade_memory, trader, &t_cfg, strategies)
+                                .await
                         {
                             tracing::error!("Error handling trade: {:?}", e);
                         }
@@ -268,11 +275,12 @@ async fn handle_trade(
     trade_memory: Arc<Mutex<HashMap<String, TradeMemory>>>,
     trader: Arc<MemeTrader>,
     t_cfg: &TradingConfig,
+    strategies: Vec<Strategy>,
 ) -> Result<()> {
     match trade {
         Trade::Open(open_trade) => handle_open_trade(open_trade, trade_memory, trader, t_cfg).await,
         Trade::Close(close_trade) => {
-            handle_close_trade(close_trade, trade_memory, trader, t_cfg).await
+            handle_close_trade(close_trade, trade_memory, trader, t_cfg, strategies).await
         }
     }
 }
@@ -301,9 +309,12 @@ async fn handle_open_trade(
     match trader
         .meta_buy(
             open_trade.contract_address.as_str(),
+            &open_trade.token,
+            &open_trade.strategy,
             t_cfg.position_size_sol,
             t_cfg.slippage_bps,
             t_cfg.tip_lamports,
+            open_trade.buy_price,
         )
         .await
     {
@@ -324,6 +335,7 @@ async fn handle_close_trade(
     trade_memory: Arc<Mutex<HashMap<String, TradeMemory>>>,
     trader: Arc<MemeTrader>,
     t_cfg: &TradingConfig,
+    strategies: Vec<Strategy>,
 ) -> Result<()> {
     tracing::info!(
         "Sell signal received: {}, {}, {}",
@@ -339,10 +351,18 @@ async fn handle_close_trade(
     let holdings = get_token_holdings(&close_trade.contract_address).await?;
     tracing::info!("holdings: {:?}", holdings);
 
+    let strategy = strategies
+        .iter()
+        .find(|s| s.strategy_id == close_trade.strategy)
+        .unwrap();
+
     match trader
         .meta_sell(
             close_trade.contract_address.as_str(),
-            holdings.parse::<u64>()?,
+            &close_trade.strategy,
+            close_trade.profit_pct,
+            close_trade.op_type,
+            strategy,
             t_cfg.tip_lamports,
         )
         .await
