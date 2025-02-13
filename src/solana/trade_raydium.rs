@@ -25,11 +25,11 @@ pub async fn create_raydium_sol_swap_ix(
 
     let pool_pubkey = Pubkey::from_str(&pool_address)?;
     let pool_accounts = get_raydium_pool(rpc_client, &pool_pubkey).await?;
-    // tracing::info!("RaydiumPoolLayout {:?}", pool_accounts);
+    // tracing::info!("RaydiumPoolLayout {:?}", &pool_accounts);
     let raydium_accounts = extract_raydium_accounts(pool_pubkey, &pool_accounts);
-    // tracing::info!("RaydiumAccounts {:?}", accounts);
+    // tracing::info!("RaydiumAccounts {:?}", &raydium_accounts);
     // let serum_market = get_serum_market(rpc_client, accounts.serum_market).await?;
-    // tracing::info!("SerumMarket {:?}", serum_market);
+    // tracing::info!("SerumMarket {:?}", &raydium_accounts.serum_market);
     let serum_accounts = get_serum_accounts(rpc_client, raydium_accounts.serum_market).await?;
     // tracing::info!("SerumAccounts {:?}", serum_accounts);
 

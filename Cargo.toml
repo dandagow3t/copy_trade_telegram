@@ -49,3 +49,4 @@ tracing-appender = "0.2.3"
 tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
 rig-core = { version = "0.6.1", git = "https://github.com/piotrostr/rig", branch = "feat/anthropic-streaming-api" }
 rig-tool-macro = "0.4.0"
+bson = { version = "2.0", features = ["chrono-0_4"] }
