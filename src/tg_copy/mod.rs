@@ -1,3 +1,5 @@
+pub mod active_trade;
+pub mod copier;
 pub mod db;
-pub mod downloader;
 pub mod parse_trade;
+pub mod strategy;

@@ -394,6 +394,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "async-stream"
+version = "0.3.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0b5a71a6f37880a80d1d7f19efd781e4b5de42c88f0722cc13bcb6cc2cfe8476"
+dependencies = [
+ "async-stream-impl",
+ "futures-core",
+ "pin-project-lite",
+]
+
+[[package]]
+name = "async-stream-impl"
+version = "0.3.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c7c24de15d275a1ecfd47a380fb4d5ec9bfe0933f309ed5e705b775596a3574d"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.98",
+]
+
+[[package]]
 name = "async-trait"
 version = "0.1.86"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -652,6 +674,7 @@ dependencies = [
  "ahash",
  "base64 0.13.1",
  "bitvec",
+ "chrono",
  "hex",
  "indexmap 2.7.1",
  "js-sys",
@@ -894,6 +917,8 @@ dependencies = [
  "async-trait",
  "base64 0.22.1",
  "borsh 1.5.5",
+ "bs58",
+ "bson",
  "chrono",
  "dotenv",
  "env_logger",
@@ -901,13 +926,14 @@ dependencies = [
  "grammers-client",
  "grammers-session",
  "hex",
+ "listen-kit",
  "log",
  "mime_guess",
  "mongodb",
  "once_cell",
  "rand 0.8.5",
  "reqwest 0.12.12",
- "rig-core 0.7.0",
+ "rig-core 0.6.1",
  "rig-tool-macro",
  "serde",
  "serde_json",
@@ -1050,6 +1076,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5efa2b3d7902f4b634a20cae3c9c4e6209dc4779feb6863329607560143efa70"
 dependencies = [
  "memchr",
+]
+
+[[package]]
+name = "ctor"
+version = "0.2.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "32a2785755761f3ddc1492979ce1e48d2c00d09311c39e4466429188f3dd6501"
+dependencies = [
+ "quote",
+ "syn 2.0.98",
 ]
 
 [[package]]
@@ -2667,6 +2703,44 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d26c52dbd32dccf2d10cac7725f8eae5296885fb5703b261f7d0a0739ec807ab"
 
 [[package]]
+name = "listen-kit"
+version = "0.3.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "base64 0.22.1",
+ "bincode",
+ "borsh 1.5.5",
+ "chrono",
+ "ctor",
+ "dotenv",
+ "env_logger",
+ "futures",
+ "futures-util",
+ "hex",
+ "log",
+ "once_cell",
+ "rand 0.8.5",
+ "reqwest 0.12.12",
+ "rig-core 0.6.1",
+ "rig-tool-macro",
+ "serde",
+ "serde_json",
+ "serde_with 3.12.0",
+ "solana-account-decoder",
+ "solana-client",
+ "solana-sdk",
+ "solana-transaction-status",
+ "spl-associated-token-account 6.0.0",
+ "spl-token 7.0.0",
+ "thiserror 2.0.11",
+ "timed",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "litemap"
 version = "0.7.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3669,6 +3743,7 @@ dependencies = [
  "url",
  "wasm-bindgen",
  "wasm-bindgen-futures",
+ "wasm-streams",
  "web-sys",
  "webpki-roots 0.25.4",
  "winreg",
@@ -3749,9 +3824,10 @@ dependencies = [
 [[package]]
 name = "rig-core"
 version = "0.6.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "db412a240081bfa42e95c84b5e2c75e29a6b9b06060623f2b735b40abe08f535"
+source = "git+https://github.com/piotrostr/rig?branch=feat%2Fanthropic-streaming-api#bf57062ebc78b70a82e5bef990f24014b46b9583"
 dependencies = [
+ "async-stream",
+ "bytes",
  "futures",
  "glob",
  "ordered-float",
@@ -3782,14 +3858,14 @@ dependencies = [
 
 [[package]]
 name = "rig-tool-macro"
-version = "0.2.0"
+version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "003120897577a52c29371de128a6491e194bf195f9bcdfc2d8608fcc4026ff4f"
+checksum = "5365d13629538315435c3b4ab888fdb4bf72121a454c71aadcc35a729db786cd"
 dependencies = [
  "anyhow",
  "proc-macro2",
  "quote",
- "rig-core 0.6.1",
+ "rig-core 0.7.0",
  "serde",
  "serde_json",
  "syn 1.0.109",

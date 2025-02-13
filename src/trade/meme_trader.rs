@@ -1,76 +1,202 @@
 use anyhow::{anyhow, Result};
+use mongodb::Collection;
+use serde::Serialize;
 use solana_sdk::{native_token::sol_to_lamports, pubkey::Pubkey};
 use std::str::FromStr;
-use tracing::{info, warn};
+use std::sync::Arc;
+use std::time::Duration;
+use tokio::time::sleep;
+use tracing::info;
 
-use crate::solana::{
-    dexscreener::search_ticker,
-    pump::fetch_metadata,
-    trade_pump::{create_buy_pump_fun_ix, create_sell_pump_fun_ix},
-    util::{execute_solana_transaction_with_priority, make_rpc_client},
+use crate::{
+    solana::{
+        dexscreener::{search_ticker, DexScreenerResponse},
+        trade_raydium::{create_raydium_sol_swap_ix, create_raydium_token_swap_ix},
+    },
+    tg_copy::{parse_trade::OperationType, strategy::Strategy},
 };
 
-pub struct MemeTrader {}
+use listen_kit::{
+    signer::SignerContext,
+    solana::{
+        balance::get_balance,
+        pump::{fetch_metadata, PumpTokenInfo},
+        trade_pump::{create_buy_pump_fun_ix, create_sell_pump_fun_ix},
+        util::{execute_solana_transaction_with_tip, make_rpc_client},
+    },
+};
 
-#[derive(Debug)]
-pub struct MemeTokenInfo {
-    pub name: String,
-    pub symbol: String,
-    pub price: f64,
-    pub market_cap: f64,
-    pub volume_24h: f64,
-    pub is_pump_fun: bool,
-    pub dex: String,
-    pub raydium_pool: Option<String>,
+use crate::tg_copy::active_trade::{ActiveTrade, ActiveTradeManager};
+
+pub struct MemeTrader {
+    active_trades: Arc<ActiveTradeManager>,
+}
+
+#[derive(Debug, Serialize)]
+pub enum TokenInfo {
+    Pump(PumpTokenInfo),
+    Dexscreener(DexScreenerResponse),
 }
 
 impl MemeTrader {
-    pub fn new() -> Self {
-        Self {}
+    pub fn new(collection: Collection<ActiveTrade>) -> Self {
+        Self {
+            active_trades: Arc::new(ActiveTradeManager::new(collection)),
+        }
+    }
+
+    /// Retry getting balance with exponential backoff
+    async fn get_balance_with_retry(
+        owner: &Pubkey,
+        token_address: &str,
+        max_retries: u32,
+        initial_delay: Duration,
+    ) -> Result<String> {
+        let mut retry_delay = initial_delay;
+        let mut holdings = None;
+
+        for attempt in 0..max_retries {
+            match get_balance(&make_rpc_client(), owner, &Pubkey::from_str(token_address)?).await {
+                Ok(balance) => {
+                    holdings = Some(balance);
+                    break;
+                }
+                Err(e) => {
+                    if attempt == max_retries - 1 {
+                        return Err(anyhow!(
+                            "Failed to get balance after {} retries: {}",
+                            max_retries,
+                            e
+                        ));
+                    }
+                    tracing::info!(
+                        "Failed to get balance on attempt {}, retrying in {:?}: {}",
+                        attempt + 1,
+                        retry_delay,
+                        e
+                    );
+                    sleep(retry_delay).await;
+                    retry_delay *= 2; // Exponential backoff
+                }
+            }
+        }
+
+        holdings.ok_or_else(|| anyhow!("Failed to get balance after retries"))
+    }
+
+    /// Meta buy function is all ecompasing buy function.
+    pub async fn meta_buy(
+        &self,
+        token_address: &str,
+        token_name: &str,
+        strategy_id: &str,
+        sol_amount: f64,
+        slippage_bps: u16,
+        tip_lamports: u64,
+        entry_price: f64,
+    ) -> Result<String> {
+        let tx_sig = self
+            .buy_impl(token_address, sol_amount, slippage_bps, tip_lamports)
+            .await?;
+
+        let owner = SignerContext::current().await.pubkey();
+
+        let holdings = Self::get_balance_with_retry(
+            &Pubkey::from_str(&owner)?,
+            token_address,
+            10,                         // max_retries
+            Duration::from_millis(500), // initial_delay
+        )
+        .await?;
+
+        tracing::info!("Holdings: {}", holdings);
+
+        let mut active_trade = ActiveTrade::new(
+            token_name.to_string(),
+            token_address.to_string(),
+            strategy_id.to_string(),
+            holdings.parse()?,
+            entry_price,
+        );
+
+        self.active_trades.save_trade(&mut active_trade).await?;
+
+        Ok(tx_sig)
+    }
+
+    /// Meta sell function is all ecompasing sell function.
+    pub async fn meta_sell(
+        &self,
+        token_address: &str,
+        strategy_id: &str,
+        profit_percentage: f64,
+        op_type: OperationType,
+        strategy: &Strategy,
+        tip_lamports: u64,
+    ) -> Result<String> {
+        let active_trade = self
+            .active_trades
+            .get_trade(token_address, strategy_id)
+            .await?
+            .ok_or_else(|| anyhow!("No active trade found for token and strategy"))?;
+
+        tracing::info!("Active trade: {:?}", active_trade);
+
+        let sell_amount =
+            match active_trade.calculate_sell_amount(profit_percentage, op_type, strategy) {
+                Some(amount) => amount,
+                None => {
+                    tracing::info!(
+                        "No sell amount could be calculated, using remaining holdings of {}",
+                        active_trade.remaining_holdings
+                    );
+                    active_trade.remaining_holdings
+                }
+            };
+
+        tracing::info!("Sell amount: {:?}", sell_amount);
+
+        let tx_sig = self
+            .sell_impl(token_address, sell_amount, tip_lamports)
+            .await?;
+
+        // Update or remove the trade based on remaining holdings
+        let new_holdings = active_trade.remaining_holdings - sell_amount;
+        if new_holdings == 0 {
+            self.active_trades
+                .remove_trade(token_address, strategy_id)
+                .await?;
+        } else {
+            self.active_trades
+                .update_holdings(token_address, strategy_id, new_holdings)
+                .await?;
+        }
+
+        Ok(tx_sig)
     }
 
     /// Get information about a meme token from either Pump.fun or Dexscreener
-    pub async fn get_token_info(&self, token_address: &str) -> Result<MemeTokenInfo> {
+    pub async fn get_token_info(&self, token_address: &str) -> Result<TokenInfo> {
         // Try Pump.fun first
-        match Pubkey::from_str(token_address) {
-            Ok(mint) => {
-                if let Ok(metadata) = fetch_metadata(&mint).await {
-                    return Ok(MemeTokenInfo {
-                        name: metadata.name,
-                        symbol: metadata.symbol,
-                        price: metadata.usd_market_cap / metadata.total_supply as f64,
-                        market_cap: metadata.usd_market_cap,
-                        volume_24h: 0.0, // Pump.fun doesn't provide 24h volume
-                        is_pump_fun: true,
-                        dex: "pump.fun".to_string(),
-                        raydium_pool: None,
-                    });
-                }
-            }
-            Err(_) => warn!("Invalid Solana address format"),
+        let pump_result = match Pubkey::from_str(token_address) {
+            Ok(mint) => fetch_metadata(&mint).await,
+            Err(_) => Err(anyhow!("Invalid Solana address format")),
+        };
+
+        // If Pump.fun fails, try Dexscreener
+        if pump_result.is_err() {
+            let dex_info = search_ticker(token_address.to_string()).await?;
+            let dex_info_clone = dex_info.clone();
+            let pairs = dex_info_clone
+                .pairs
+                .into_iter()
+                .find(|pair| pair.dex_id == "raydium") // we currently support only Raydium besids Pump.fun
+                .ok_or_else(|| anyhow!("No Raydium trading pair found"))?;
+            tracing::info!("Dexscreener pairs: {:?}", pairs);
+            Ok(TokenInfo::Dexscreener(dex_info))
+        } else {
+            Ok(TokenInfo::Pump(pump_result.unwrap()))
         }
-
-        // Fallback to Dexscreener
-        let dex_info = search_ticker(token_address.to_string()).await?;
-        let pair = dex_info
-            .pairs
-            .first()
-            .ok_or_else(|| anyhow!("No trading pairs found"))?;
-
-        Ok(MemeTokenInfo {
-            name: pair.base_token.name.clone(),
-            symbol: pair.base_token.symbol.clone(),
-            price: pair.price_usd.parse::<f64>().unwrap_or(0.0),
-            market_cap: pair.liquidity.usd,
-            volume_24h: pair.volume.h24,
-            is_pump_fun: false,
-            dex: pair.dex_id.clone(),
-            raydium_pool: if pair.dex_id == "raydium" {
-                Some(pair.pair_address.clone())
-            } else {
-                None
-            },
-        })
     }
 
     /// Buy a token on Pump.fun
@@ -79,113 +205,241 @@ impl MemeTrader {
         token_address: &str,
         sol_amount: f64,
         slippage_bps: u16,
+        tip_lamports: u64,
     ) -> Result<String> {
-        info!("Buying {} SOL worth of token {}", sol_amount, token_address);
-
-        // Verify it's a Pump.fun token first
-        // let mint = Pubkey::from_str(token_address)?;
-        // let pump_accounts = mint_to_pump_accounts(&mint);
-
-        // Get bonding curve to verify token exists
-        // let bonding_curve =
-        //     get_bonding_curve(&self.rpc_client, pump_accounts.bonding_curve).await?;
-
-        // if bonding_curve.complete {
-        //     return Err(anyhow!("Token is already completed/rugged"));
-        // }
-
+        info!(
+            "Pump.fun: try buying {} SOL worth of token {}",
+            sol_amount, token_address
+        );
         let token_address = token_address.to_string();
 
-        execute_solana_transaction_with_priority(move |owner| async move {
-            create_buy_pump_fun_ix(
-                token_address.to_string(),
-                sol_to_lamports(sol_amount),
-                slippage_bps,
-                &make_rpc_client(),
-                &owner,
-            )
-            .await
-        })
+        execute_solana_transaction_with_tip(
+            move |owner| async move {
+                create_buy_pump_fun_ix(
+                    token_address.to_string(),
+                    sol_to_lamports(sol_amount),
+                    slippage_bps,
+                    &make_rpc_client(),
+                    &owner,
+                )
+                .await
+            },
+            tip_lamports,
+        )
         .await
     }
 
     /// Sell a token on Pump.fun
-    pub async fn sell_pump_fun(&self, token_address: &str, token_amount: u64) -> Result<String> {
+    pub async fn sell_pump_fun(
+        &self,
+        token_address: &str,
+        token_amount: u64,
+        tip_lamports: u64,
+    ) -> Result<String> {
         info!("Selling {} tokens of {}", token_amount, token_address);
 
         let token_address = token_address.to_string();
-        execute_solana_transaction_with_priority(move |owner| async move {
-            create_sell_pump_fun_ix(token_address.to_string(), token_amount, &owner).await
-        })
+        execute_solana_transaction_with_tip(
+            move |owner| async move {
+                create_sell_pump_fun_ix(token_address.to_string(), token_amount, &owner).await
+            },
+            tip_lamports,
+        )
         .await
     }
 
-    // pub async fn buy_on_jupiter(
-    //     &self,
-    //     token_address: &str,
-    //     sol_amount: f64,
-    //     slippage_bps: u16,
-    // ) -> Result<String> {
-    //     info!(
-    //         "Buying {} SOL worth of token {} on Jupiter",
-    //         sol_amount, token_address
-    //     );
+    pub async fn buy_raydium(
+        &self,
+        token_address: &str,
+        raydium_pool: &str,
+        sol_amount: f64,
+        slippage_bps: u16,
+        tip_lamports: u64,
+    ) -> Result<String> {
+        info!(
+            "Raydium: try buying {} SOL worth of token {}",
+            sol_amount, token_address
+        );
+        let raydium_pool = raydium_pool.to_string();
+        let token_address = token_address.to_string();
 
-    //     let token_address = token_address.to_string();
-    //     execute_solana_transactions(move |owner| async move {
-    //         create_trade_transaction(
-    //             "So11111111111111111111111111111111111111112".to_string(), // WSOL
-    //             sol_to_lamports(sol_amount),
-    //             token_address.to_string(),
-    //             slippage_bps,
-    //             &owner,
-    //         )
-    //         .await
-    //     })
-    //     .await
-    // }
-    // // TODO: Add Raydium trading functions when needed
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[tokio::test]
-    async fn test_get_token_info_pump_fun() {
-        let trader = MemeTrader::new();
-        let info = trader
-            .get_token_info("4cRkQ2dntpusYag6Zmvco8T78WxK9Jqh1eEZJox8pump")
-            .await
-            .unwrap();
-
-        assert!(info.is_pump_fun);
-        assert_eq!(info.symbol, "🗿");
+        execute_solana_transaction_with_tip(
+            move |owner| async move {
+                create_raydium_sol_swap_ix(
+                    raydium_pool,
+                    sol_to_lamports(sol_amount),
+                    slippage_bps,
+                    Pubkey::from_str(token_address.as_str())?,
+                    &make_rpc_client(),
+                    &owner,
+                )
+                .await
+            },
+            tip_lamports,
+        )
+        .await
     }
 
-    #[tokio::test]
-    async fn test_get_token_info_raydium() {
-        let trader = MemeTrader::new();
-        let info = trader
-            .get_token_info("BONK97G5KsjgR9jFbwcsUhoSgwKBQ9pRY1g6gQpKEanB")
-            .await
-            .unwrap();
+    pub async fn sell_raydium(
+        &self,
+        token_address: &str,
+        raydium_pool: &str,
+        token_amount: u64,
+        tip_lamports: u64,
+    ) -> Result<String> {
+        info!(
+            "Raydium: try selling {} tokens of {} on Raydium pool {}",
+            token_amount, token_address, raydium_pool
+        );
+        let raydium_pool = raydium_pool.to_string();
+        let token_address = token_address.to_string();
 
-        assert!(!info.is_pump_fun);
-        assert_eq!(info.symbol, "BONK");
+        execute_solana_transaction_with_tip(
+            move |owner| async move {
+                create_raydium_token_swap_ix(
+                    raydium_pool,
+                    token_amount as u64,
+                    Pubkey::from_str(token_address.as_str())?, // Token
+                    &make_rpc_client(),
+                    &owner,
+                )
+                .await
+            },
+            tip_lamports,
+        )
+        .await
     }
 
-    #[tokio::test]
-    #[ignore] // Requires wallet with SOL
-    async fn test_buy_pump_fun() {
-        let trader = MemeTrader::new();
-        let result = trader
-            .buy_pump_fun(
-                "4cRkQ2dntpusYag6Zmvco8T78WxK9Jqh1eEZJox8pump",
-                0.01, // 0.01 SOL
-                500,  // 5% slippage
-            )
-            .await;
-        assert!(result.is_ok());
+    /// Internal buy implementation that handles the actual trading logic
+    async fn buy_impl(
+        &self,
+        token_address: &str,
+        sol_amount: f64,
+        slippage_bps: u16,
+        tip_lamports: u64,
+    ) -> Result<String> {
+        let token_info = self.get_token_info(token_address).await;
+        tracing::info!("buy_impl/Token info: {:?}", token_info);
+
+        match token_info {
+            Ok(TokenInfo::Pump(pump_info)) => {
+                match pump_info.complete {
+                    true => tracing::info!(
+                        "Pump.fun: complete, buying from Raydium; pool {}",
+                        pump_info.raydium_pool
+                    ),
+                    false => tracing::info!(
+                        "Pump.fun: incomplete, bonding curve {}",
+                        pump_info.bonding_curve
+                    ),
+                }
+
+                if !pump_info.complete {
+                    self.buy_pump_fun(token_address, sol_amount, slippage_bps, tip_lamports)
+                        .await
+                } else {
+                    self.buy_raydium(
+                        token_address,
+                        pump_info.raydium_pool.as_str(),
+                        sol_amount,
+                        slippage_bps,
+                        tip_lamports,
+                    )
+                    .await
+                }
+            }
+
+            Ok(TokenInfo::Dexscreener(dex_info)) => {
+                let pairs = dex_info
+                    .pairs
+                    .into_iter()
+                    .find(|pair| pair.dex_id == "raydium") // we currently support only Raydium besids Pump.fun
+                    .ok_or_else(|| anyhow!("No Raydium trading pair found"))?;
+                tracing::info!(
+                    "According to Dexscreener token is on Raydium, pool {}",
+                    &pairs.pair_address
+                );
+                // For now, we'll just return an error since Dexscreener selling is not implemented
+                self.buy_raydium(
+                    token_address,
+                    &pairs.pair_address,
+                    sol_amount,
+                    slippage_bps,
+                    tip_lamports,
+                )
+                .await
+            }
+            _ => {
+                tracing::info!(
+                    "Token info not found on Pump.fun or Dexscreener. Fallback to Pump.fun"
+                );
+                self.buy_pump_fun(token_address, sol_amount, slippage_bps, tip_lamports)
+                    .await
+            }
+        }
+    }
+
+    /// Internal sell implementation that handles the actual trading logic
+    async fn sell_impl(
+        &self,
+        token_address: &str,
+        token_amount: u64,
+        tip_lamports: u64,
+    ) -> Result<String> {
+        let token_info = self.get_token_info(token_address).await;
+
+        match token_info {
+            Ok(TokenInfo::Pump(pump_info)) => {
+                match pump_info.complete {
+                    true => tracing::info!(
+                        "Pump.fun: complete, selling on Raydium; pool {}",
+                        pump_info.raydium_pool
+                    ),
+                    false => tracing::info!(
+                        "Pump.fun: incomplete, selling on bonding curve {}",
+                        pump_info.bonding_curve
+                    ),
+                }
+
+                if !pump_info.complete {
+                    self.sell_pump_fun(token_address, token_amount, tip_lamports)
+                        .await
+                } else {
+                    self.sell_raydium(
+                        token_address,
+                        pump_info.raydium_pool.as_str(),
+                        token_amount,
+                        tip_lamports,
+                    )
+                    .await
+                }
+            }
+            Ok(TokenInfo::Dexscreener(dex_info)) => {
+                let pairs = dex_info
+                    .pairs
+                    .into_iter()
+                    .find(|pair| pair.dex_id == "raydium") // we currently support only Raydium besids Pump.fun
+                    .ok_or_else(|| anyhow!("No Raydium trading pair found"))?;
+                tracing::info!(
+                    "According to Dexscreener token is on Raydium, pool {}",
+                    &pairs.pair_address
+                );
+                // For now, we'll just return an error since Dexscreener selling is not implemented
+                self.sell_raydium(
+                    token_address,
+                    &pairs.pair_address,
+                    token_amount,
+                    tip_lamports,
+                )
+                .await
+            }
+            _ => {
+                tracing::info!(
+                    "Token info not found on Pump.fun or Dexscreener. Fallback to Pump.fun"
+                );
+                self.sell_pump_fun(token_address, token_amount, tip_lamports)
+                    .await
+            }
+        }
     }
 }
