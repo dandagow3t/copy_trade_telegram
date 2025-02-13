@@ -86,7 +86,7 @@ impl ActiveTrade {
                     tracing::info!("> Selected take profit: {}", condition.description);
                     let percentage = condition.target_open_percentage as f64 / 100.0;
                     let percentage_to_sell = 1f64 - percentage;
-                    tracing::info!("> Percentage to sell: {}%", percentage_to_sell);
+                    tracing::info!("> Percentage to sell: {}%", percentage_to_sell.mul(100.0));
                     let target_selling = (self.initial_holdings as f64)
                         .mul(percentage_to_sell)
                         .round() as u64;

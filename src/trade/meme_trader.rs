@@ -4,6 +4,8 @@ use serde::Serialize;
 use solana_sdk::{native_token::sol_to_lamports, pubkey::Pubkey};
 use std::str::FromStr;
 use std::sync::Arc;
+use std::time::Duration;
+use tokio::time::sleep;
 use tracing::info;
 
 use crate::{
@@ -43,6 +45,45 @@ impl MemeTrader {
         }
     }
 
+    /// Retry getting balance with exponential backoff
+    async fn get_balance_with_retry(
+        owner: &Pubkey,
+        token_address: &str,
+        max_retries: u32,
+        initial_delay: Duration,
+    ) -> Result<String> {
+        let mut retry_delay = initial_delay;
+        let mut holdings = None;
+
+        for attempt in 0..max_retries {
+            match get_balance(&make_rpc_client(), owner, &Pubkey::from_str(token_address)?).await {
+                Ok(balance) => {
+                    holdings = Some(balance);
+                    break;
+                }
+                Err(e) => {
+                    if attempt == max_retries - 1 {
+                        return Err(anyhow!(
+                            "Failed to get balance after {} retries: {}",
+                            max_retries,
+                            e
+                        ));
+                    }
+                    tracing::info!(
+                        "Failed to get balance on attempt {}, retrying in {:?}: {}",
+                        attempt + 1,
+                        retry_delay,
+                        e
+                    );
+                    sleep(retry_delay).await;
+                    retry_delay *= 2; // Exponential backoff
+                }
+            }
+        }
+
+        holdings.ok_or_else(|| anyhow!("Failed to get balance after retries"))
+    }
+
     /// Meta buy function is all ecompasing buy function.
     pub async fn meta_buy(
         &self,
@@ -60,11 +101,11 @@ impl MemeTrader {
 
         let owner = SignerContext::current().await.pubkey();
 
-        // Get token holdings and current price after purchase
-        let holdings = get_balance(
-            &make_rpc_client(),
+        let holdings = Self::get_balance_with_retry(
             &Pubkey::from_str(&owner)?,
-            &Pubkey::from_str(token_address)?,
+            token_address,
+            10,                         // max_retries
+            Duration::from_millis(500), // initial_delay
         )
         .await?;
 
@@ -145,10 +186,12 @@ impl MemeTrader {
         // If Pump.fun fails, try Dexscreener
         if pump_result.is_err() {
             let dex_info = search_ticker(token_address.to_string()).await?;
-            let pairs = dex_info
+            let dex_info_clone = dex_info.clone();
+            let pairs = dex_info_clone
                 .pairs
-                .first()
-                .ok_or_else(|| anyhow!("No trading pairs found"))?;
+                .into_iter()
+                .find(|pair| pair.dex_id == "raydium") // we currently support only Raydium besids Pump.fun
+                .ok_or_else(|| anyhow!("No Raydium trading pair found"))?;
             tracing::info!("Dexscreener pairs: {:?}", pairs);
             Ok(TokenInfo::Dexscreener(dex_info))
         } else {
@@ -276,6 +319,7 @@ impl MemeTrader {
         tip_lamports: u64,
     ) -> Result<String> {
         let token_info = self.get_token_info(token_address).await;
+        tracing::info!("buy_impl/Token info: {:?}", token_info);
 
         match token_info {
             Ok(TokenInfo::Pump(pump_info)) => {
@@ -306,10 +350,24 @@ impl MemeTrader {
             }
 
             Ok(TokenInfo::Dexscreener(dex_info)) => {
-                tracing::info!("Token is on Dexscreener {:#?}", dex_info);
-                // self.buy_dexscreener(token_address, sol_amount, slippage_bps)
-                //     .await
-                Ok(String::new())
+                let pairs = dex_info
+                    .pairs
+                    .into_iter()
+                    .find(|pair| pair.dex_id == "raydium") // we currently support only Raydium besids Pump.fun
+                    .ok_or_else(|| anyhow!("No Raydium trading pair found"))?;
+                tracing::info!(
+                    "According to Dexscreener token is on Raydium, pool {}",
+                    &pairs.pair_address
+                );
+                // For now, we'll just return an error since Dexscreener selling is not implemented
+                self.buy_raydium(
+                    token_address,
+                    &pairs.pair_address,
+                    sol_amount,
+                    slippage_bps,
+                    tip_lamports,
+                )
+                .await
             }
             _ => {
                 tracing::info!(
@@ -357,9 +415,23 @@ impl MemeTrader {
                 }
             }
             Ok(TokenInfo::Dexscreener(dex_info)) => {
-                tracing::info!("Token is on Dexscreener {:#?}", dex_info);
+                let pairs = dex_info
+                    .pairs
+                    .into_iter()
+                    .find(|pair| pair.dex_id == "raydium") // we currently support only Raydium besids Pump.fun
+                    .ok_or_else(|| anyhow!("No Raydium trading pair found"))?;
+                tracing::info!(
+                    "According to Dexscreener token is on Raydium, pool {}",
+                    &pairs.pair_address
+                );
                 // For now, we'll just return an error since Dexscreener selling is not implemented
-                Err(anyhow!("Selling on Dexscreener not implemented yet"))
+                self.sell_raydium(
+                    token_address,
+                    &pairs.pair_address,
+                    token_amount,
+                    tip_lamports,
+                )
+                .await
             }
             _ => {
                 tracing::info!(

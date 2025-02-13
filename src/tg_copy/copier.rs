@@ -353,7 +353,7 @@ async fn handle_close_trade(
 
     let strategy = strategies
         .iter()
-        .find(|s| s.strategy_id == close_trade.strategy)
+        .find(|s| s.strategy_id.replace("_", "") == close_trade.strategy)
         .unwrap();
 
     match trader
